@@ -60,7 +60,7 @@ final class HistoryViewModel: ObservableObject {
     }
 
     /// Full content for the detail pane.
-    func detail(for record: HistoryRecord) -> (content: PinContent, annotationData: Data?)? {
+    func detail(for record: HistoryRecord) -> PinContentState? {
         store.entry(id: record.id)
     }
 }

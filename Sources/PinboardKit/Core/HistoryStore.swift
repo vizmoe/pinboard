@@ -85,28 +85,28 @@ final class HistoryStore {
     }
 
     /// Rebuilds the pin payload: content plus editable annotation data.
-    func entry(id: UUID) -> (content: PinContent, annotationData: Data?)? {
+    func entry(id: UUID) -> PinContentState? {
         guard let record = record(id: id) else { return nil }
         let dir = recordDirectory(id)
         switch record.kind {
         case .text:
             if let data = try? Data(contentsOf: dir.appendingPathComponent("content.rtfd")),
                let text = NSAttributedString(rtfd: data, documentAttributes: nil) {
-                return (.text(text), nil)
+                return PinContentState(content: .text(text))
             }
             if let data = try? Data(contentsOf: dir.appendingPathComponent("content.rtf")),
                let text = NSAttributedString(rtf: data, documentAttributes: nil) {
-                return (.text(text), nil)
+                return PinContentState(content: .text(text))
             }
             if let plain = record.text {
-                return (.text(NSAttributedString(string: plain, attributes: ClipboardReader.defaultTextAttributes())), nil)
+                return PinContentState(content: .text(NSAttributedString(string: plain, attributes: ClipboardReader.defaultTextAttributes())))
             }
             return nil
         case .image:
             guard let data = try? Data(contentsOf: dir.appendingPathComponent("image.png")),
                   let image = NSImage(data: data) else { return nil }
             let annotations = try? Data(contentsOf: dir.appendingPathComponent("annotations.json"))
-            return (.image(image), annotations)
+            return PinContentState(content: .image(image), annotationData: annotations)
         }
     }
 

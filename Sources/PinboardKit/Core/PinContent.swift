@@ -19,6 +19,13 @@ enum PinKind: String, Codable {
     case image
 }
 
+/// Editable payload shared by history and snapshots. Images retain their
+/// original pixels; crop and annotations travel separately from copy/export.
+struct PinContentState {
+    var content: PinContent
+    var annotationData: Data? = nil
+}
+
 extension NSAttributedString {
     var fullRange: NSRange { NSRange(location: 0, length: length) }
 

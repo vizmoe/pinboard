@@ -25,14 +25,14 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// content's natural ratio. Can be switched on per pin from the menu.
     var isAspectLocked = false
 
-    init(content: PinContent, id: UUID = UUID()) {
+    init(content: PinContent, id: UUID = UUID(), annotationData: Data? = nil) {
         self.id = id
         self.kind = content.kind
         switch content {
         case .text(let attributed):
             contentView = TextPinView(attributedString: attributed)
         case .image(let image):
-            contentView = ImagePinView(image: image)
+            contentView = ImagePinView(image: image, annotationData: annotationData)
         }
         panel = PinPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200))
         super.init()
@@ -155,18 +155,6 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// manager debounces this into a history write.
     func contentDidChange() {
         manager?.pinContentDidChange(self)
-    }
-
-    /// What history should store: the *editable* form, so an image keeps its
-    /// base pixels plus separate annotation data rather than a flat render.
-    var historyContent: PinContent {
-        if let imagePin = contentView as? ImagePinView { return .image(imagePin.baseImage) }
-        return contentView.currentContent()
-    }
-
-    var historyAnnotationData: Data? {
-        guard let store = (contentView as? ImagePinView)?.annotationStore, !store.isEmpty else { return nil }
-        return store.encoded()
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -297,8 +285,9 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     // MARK: - Persistence
 
     func snapshot() -> PinSnapshot {
-        PinSnapshot(id: id, content: contentView.currentContent(), frame: panel.frame,
-                    isHidden: isPinHidden, annotationData: historyAnnotationData, opacity: opacity)
+        let state = contentView.captureState()
+        return PinSnapshot(id: id, content: state.content, frame: panel.frame,
+                           isHidden: isPinHidden, annotationData: state.annotationData, opacity: opacity)
     }
 }
 

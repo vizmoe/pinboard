@@ -11,6 +11,7 @@ protocol PinContentDisplaying: NSView {
 
     func idealSize(fitting maxSize: CGSize) -> CGSize
     func currentContent() -> PinContent
+    func captureState() -> PinContentState
     func copyToPasteboard()
     func endEditing()
 
@@ -31,6 +32,7 @@ protocol PinContentDisplaying: NSView {
 }
 
 extension PinContentDisplaying {
+    func captureState() -> PinContentState { PinContentState(content: currentContent()) }
     var contentAspectRatio: CGSize? { nil }
     var minimumPinSize: CGSize { CGSize(width: 120, height: 60) }
     func endEditing() {}

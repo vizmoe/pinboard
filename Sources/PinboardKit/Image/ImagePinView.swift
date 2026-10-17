@@ -24,7 +24,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
     private var pixelSize: CGSize { baseImage.pixelSize }
     private var sourceRect: CGRect { annotationStore.cropRect ?? CGRect(origin: .zero, size: pixelSize) }
 
-    init(image: NSImage) {
+    init(image: NSImage, annotationData: Data? = nil) {
         baseImage = image
         baseCGImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         effects = baseCGImage.map(ImageEffects.init(base:))
@@ -54,6 +54,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
             self?.refreshAfterStoreChange()
             self?.pinController?.contentDidChange()
         }
+        if let annotationData { restoreAnnotations(annotationData) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
@@ -197,6 +198,11 @@ final class ImagePinView: NSView, PinContentDisplaying {
     }
 
     func currentContent() -> PinContent { .image(renderedImage()) }
+
+    func captureState() -> PinContentState {
+        PinContentState(content: .image(baseImage),
+                        annotationData: annotationStore.isEmpty ? nil : annotationStore.encoded())
+    }
 
     func cursor(at point: NSPoint) -> NSCursor {
         isAnnotating ? canvas.cursor(at: convert(point, from: superview)) : .openHand

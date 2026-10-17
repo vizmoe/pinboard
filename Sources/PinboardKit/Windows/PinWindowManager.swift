@@ -27,10 +27,7 @@ final class PinWindowManager {
 
     @discardableResult
     func createPin(content: PinContent, annotationData: Data? = nil) -> PinWindowController {
-        let controller = PinWindowController(content: content)
-        if let annotationData, let imagePin = controller.contentView as? ImagePinView {
-            imagePin.restoreAnnotations(annotationData)
-        }
+        let controller = PinWindowController(content: content, annotationData: annotationData)
         controller.manager = self
         let screen = targetScreen()
         let frame = controller.idealFrame(anchoredAt: nextAnchor(on: screen), on: screen)
@@ -102,8 +99,8 @@ final class PinWindowManager {
     /// Records a new pin immediately; every later edit updates this same record.
     private func registerInHistory(_ controller: PinWindowController) {
         guard let store = historyStore else { return }
-        let recordID = store.upsert(content: controller.historyContent,
-                                    annotationData: controller.historyAnnotationData)
+        let state = controller.contentView.captureState()
+        let recordID = store.upsert(content: state.content, annotationData: state.annotationData)
         controller.historyRecordID = recordID
         pruneHistoryIfDue()
     }
@@ -135,9 +132,8 @@ final class PinWindowManager {
 
     private func writeHistory(for controller: PinWindowController) {
         guard let id = controller.historyRecordID else { return }
-        historyStore?.upsert(id: id,
-                             content: controller.historyContent,
-                             annotationData: controller.historyAnnotationData)
+        let state = controller.contentView.captureState()
+        historyStore?.upsert(id: id, content: state.content, annotationData: state.annotationData)
     }
 
     /// Re-pins a history record as a new independent window + new record.

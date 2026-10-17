@@ -94,4 +94,36 @@ final class ImagePinTests: XCTestCase {
         view.annotationStore.undoManager.redo()
         XCTAssertEqual(view.annotationStore.annotations.count, 2)
     }
+
+    func testSnapshotRoundTripKeepsOriginalPixelsAndEditableAnnotations() throws {
+        let (pin, view) = try makePin(width: 400, height: 300)
+        view.annotationStore.add(Annotation(
+            tool: .highlight,
+            points: [CGPoint(x: 0, y: 0), CGPoint(x: 400, y: 300)],
+            style: AnnotationStyle(colorHex: "#FF0000", lineWidth: 3, fontSize: 18)
+        ))
+        view.annotationStore.setCrop(CGRect(x: 50, y: 40, width: 200, height: 100))
+
+        let snapshot = try JSONDecoder().decode(PinSnapshot.self, from: JSONEncoder().encode(pin.snapshot()))
+        let restored = manager.createPin(content: try XCTUnwrap(snapshot.makeContent()),
+                                         annotationData: snapshot.annotationData)
+        let restoredView = try XCTUnwrap(restored.contentView as? ImagePinView)
+
+        XCTAssertEqual(restoredView.baseImage.pixelSize, CGSize(width: 400, height: 300))
+        XCTAssertEqual(restoredView.annotationStore.annotations, view.annotationStore.annotations)
+        XCTAssertEqual(restoredView.annotationStore.cropRect, view.annotationStore.cropRect)
+        let original = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(view.renderedImage().pngData())))
+        let roundTrip = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(restoredView.renderedImage().pngData())))
+        let expected = try XCTUnwrap(original.colorAt(x: 100, y: 50)?.usingColorSpace(.sRGB))
+        let actual = try XCTUnwrap(roundTrip.colorAt(x: 100, y: 50)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(actual.greenComponent, expected.greenComponent, accuracy: 0.01,
+                       "restoring must not apply the highlight twice")
+
+        restoredView.annotationStore.reset()
+        XCTAssertEqual(restoredView.renderedImage().pixelSize, CGSize(width: 400, height: 300))
+        let reset = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(restoredView.renderedImage().pngData())))
+        let pixel = try XCTUnwrap(reset.colorAt(x: 200, y: 150)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(pixel.greenComponent, 1, accuracy: 0.01,
+                       "reset must recover untinted original pixels")
+    }
 }
