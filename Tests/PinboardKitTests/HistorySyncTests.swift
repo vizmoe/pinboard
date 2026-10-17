@@ -192,6 +192,36 @@ final class HistorySyncTests: XCTestCase {
         manager.historyStore = store
     }
 
+    /// `pinboard://paste` at launch creates its pin before the app installs
+    /// the store; the record must still appear once the store exists.
+    func testPinCreatedBeforeTheStoreArrivesIsRegistered() throws {
+        manager.historyStore = nil
+        let pin = manager.createPin(content: .text(NSAttributedString(string: "pasted at launch")))
+        XCTAssertNil(pin.historyRecordID)
+
+        manager.historyStore = store
+
+        let recordID = try XCTUnwrap(pin.historyRecordID, "the pin is adopted once a store exists")
+        XCTAssertEqual(store.record(id: recordID)?.text, "pasted at launch")
+    }
+
+    /// Adoption only covers pins that never had a record: an explicitly
+    /// deleted one must stay deleted.
+    func testDeletedHistoryIsNotReregisteredByAStoreChange() throws {
+        let pin = try makePin()
+        let recordID = try XCTUnwrap(pin.historyRecordID)
+        let model = HistoryViewModel(store: store, manager: manager)
+        model.selection = recordID
+        model.delete(recordID)
+        XCTAssertNil(pin.historyRecordID)
+
+        manager.historyStore = nil
+        manager.historyStore = store
+
+        XCTAssertNil(pin.historyRecordID, "a deleted record is not recreated")
+        XCTAssertNil(store.record(id: recordID))
+    }
+
     func testAnnotationEditSyncs() throws {
         let image = NSImage(size: NSSize(width: 30, height: 30))
         image.lockFocus()

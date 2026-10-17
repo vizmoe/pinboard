@@ -9,7 +9,14 @@ final class PinWindowManager {
     var onChange: (() -> Void)?
 
     /// nil disables history (tests opt in with a temp-directory store).
-    var historyStore: HistoryStore?
+    var historyStore: HistoryStore? {
+        didSet {
+            // A pin can exist before the store does: `pinboard://paste` at
+            // launch delivers its URL event before `applicationDidFinishLaunching`
+            // installs the store. Those pins get their record here.
+            adoptRecordlessPins()
+        }
+    }
     var onHistoryError: ((Error) -> Void)?
     /// Loads images referenced by pasted HTML. Tests inject a stub so they
     /// never touch the network.
@@ -117,6 +124,7 @@ final class PinWindowManager {
         dirtyHistoryRecords.remove(id)
         for controller in pins where controller.historyRecordID == id {
             controller.historyRecordID = nil
+            controller.historyWasDeleted = true
         }
     }
 
@@ -130,6 +138,16 @@ final class PinWindowManager {
         dirtyHistoryRecords.insert(id)
         writeHistory(for: controller)
         pruneHistoryIfDue()
+    }
+
+    /// Registers live pins that never had a record — the launch-time paste
+    /// case. A pin whose record the user deleted stays out: it is excluded,
+    /// not recordless by accident.
+    private func adoptRecordlessPins() {
+        guard historyStore != nil else { return }
+        for controller in pins where controller.historyRecordID == nil && !controller.historyWasDeleted {
+            registerInHistory(controller)
+        }
     }
 
     /// Debounced entry point called by pin views whenever content mutates.

@@ -124,7 +124,10 @@ Window management never inspects content specifics: pin views conform to
   mode keeps the stored one); re-pinning restores the record's mode explicitly.
   Retention prunes by `updatedAt`, always sparing records whose pins are still
   open. `PinWindowManager.historyStore` is nil by default — tests inject a
-  temp-dir store.
+  temp-dir store. A pin created before the store exists gets its record when
+  the store is installed: `pinboard://paste` at launch delivers its URL event
+  before `applicationDidFinishLaunching` runs. `historyWasDeleted` keeps a pin
+  whose record the user deleted out of that adoption.
 - Both floating strips (`TextFormatToolbar`, `AnnotationToolbar`) subclass
   `AttachedToolbar`: a child panel below the pin. Controls must be
   `FirstMouseButton`/`FirstMouseSlider` because pin panels are non-activating.

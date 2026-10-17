@@ -15,6 +15,10 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// place — they never spawn new entries.
     var historyRecordID: UUID?
 
+    /// True once the user deleted this pin's history. It is never registered
+    /// again, even if a store is installed later.
+    var historyWasDeleted = false
+
     /// Per-window opacity (1 = fully opaque). Lives on the pin, not in
     /// preferences — each window manages its own.
     var opacity: Double = 1.0 {
