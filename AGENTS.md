@@ -42,14 +42,17 @@ library so it can be unit tested (`@testable import PinboardKit`).
 
 - `App` — delegate, main menu, status bar menu, URL router, toast, `HotKeyManager`
   (Carbon `RegisterEventHotKey`; default `⌃⌥⇧⌘P`, persisted in `Preferences`)
-- `Core` — `PinContent`, `PinSnapshot`, `Preferences`, `HistoryStore`
+- `Core` — `PinContent`, `PinSnapshot`, `Preferences`, `HistoryStore`,
+  `TextContentMode`
 - `History` — `HistoryView`/`HistoryWindowController` (search, Pin Again, Copy,
   Delete, Clear; list keeps `updatedAt`-desc records)
 - `Clipboard` — pasteboard resolution (RTFD > RTF > image > HTML > plain)
 - `Windows` — `PinPanel`, `PinRootView`, `PinWindowController`,
   `PinWindowManager`, drag/resize event loops, hover chrome
-- `Text` — `TextPinView` / `PinTextView` (rich text editing), `TextFormatter`
-  (attribute logic, unit tested), `TextFormatToolbar`
+- `Text` — `TextPinView` / `PinTextView` (rich text / Markdown source editing),
+  `TextFormatter` (attribute logic, unit tested), `TextFormatToolbar`
+- `Markdown` — `MarkdownRenderer` (Foundation cmark `PresentationIntent` walk →
+  display-only attributed string, unit tested)
 - `Image` — `ImagePinView` plus `Image/Annotation` (model, store with undo,
   renderer, canvas, toolbar, Core Image effects)
 - `Settings` — SwiftUI preferences window
@@ -88,8 +91,16 @@ Window management never inspects content specifics: pin views conform to
 - Annotation style is per-annotation (`Annotation.style`), editable via the
   toolbar when a shape is selected (`canvas.updateSelectedStyle` — never the
   global `Preferences` seed). `AnnotationStyle.fontName` is optional so old
-  payloads still decode. Settings only hosts Keyboard Shortcuts + History;
-  other preferences persist silently as fixed defaults.
+  payloads still decode. Settings hosts Keyboard Shortcuts, Text (mode) and
+  History; other preferences persist silently as fixed defaults.
+- Text pins have two modes (`TextContentMode`). A Markdown pin's canonical
+  content is the **raw source** (kept as the `.text` attributed string), the
+  idle display is `MarkdownRenderer.render(source)`, and editing shows the
+  source with no format toolbar; a rich pin is unchanged. `Preferences.textMode`
+  is the default for new pins and for pins whose `hasExplicitTextMode` is false;
+  a context-menu switch sets it explicitly. `setTextMode` keeps a one-step
+  `modeBackup` so switching back before the next edit restores the exact
+  previous representation.
 - History: one directory per record under
   `~/Library/Application Support/Pinboard/History/<uuid>/` (`record.json` +
   payload files) so a corrupt record can only lose itself. Pins link to their
@@ -97,10 +108,12 @@ Window management never inspects content specifics: pin views conform to
   `contentDidChange()` and are debounced (`PinWindowManager.historyWriteDelay`)
   into `HistoryStore.upsert` — the record holds the *latest* state, never
   duplicates. Image records store base pixels + `annotations.json` (restore via
-  `AnnotationStore.restore`), never a flattened bitmap. Retention prunes by
-  `updatedAt`, always sparing records whose pins are still open.
-  `PinWindowManager.historyStore` is nil by default — tests inject a temp-dir
-  store.
+  `AnnotationStore.restore`), never a flattened bitmap. Text records store the
+  source RTF plus `textMode` (absent = legacy = rich text; `upsert` without a
+  mode keeps the stored one); re-pinning restores the record's mode explicitly.
+  Retention prunes by `updatedAt`, always sparing records whose pins are still
+  open. `PinWindowManager.historyStore` is nil by default — tests inject a
+  temp-dir store.
 - Both floating strips (`TextFormatToolbar`, `AnnotationToolbar`) subclass
   `AttachedToolbar`: a child panel below the pin. Controls must be
   `FirstMouseButton`/`FirstMouseSlider` because pin panels are non-activating.

@@ -13,6 +13,7 @@ final class Preferences: ObservableObject {
         static let topLevel = "window.topLevel"
         static let allSpaces = "window.allSpaces"
         static let textPadding = "text.padding"
+        static let textMode = "text.mode"
         static let annotationColor = "annotation.color"
         static let annotationLineWidth = "annotation.lineWidth"
         static let annotationFontSize = "annotation.fontSize"
@@ -67,6 +68,9 @@ final class Preferences: ObservableObject {
     @Published var topLevel: TopLevel = .floating { didSet { persist(topLevel.rawValue, Key.topLevel) } }
     @Published var showOnAllSpaces: Bool = true { didSet { persist(showOnAllSpaces, Key.allSpaces) } }
     @Published var textPadding: Double = 12 { didSet { persist(textPadding, Key.textPadding) } }
+    /// Global default for text pins. New pins and pins that were never
+    /// switched individually follow it; a per-window switch overrides it.
+    @Published var textMode: TextContentMode = .richText { didSet { persist(textMode.rawValue, Key.textMode) } }
     @Published var annotationColorHex: String = "#FF3B30" { didSet { persist(annotationColorHex, Key.annotationColor) } }
     @Published var annotationLineWidth: Double = 3 { didSet { persist(annotationLineWidth, Key.annotationLineWidth) } }
     @Published var annotationFontSize: Double = 18 { didSet { persist(annotationFontSize, Key.annotationFontSize) } }
@@ -108,6 +112,7 @@ final class Preferences: ObservableObject {
         if let raw = defaults.string(forKey: Key.topLevel), let value = TopLevel(rawValue: raw) { topLevel = value }
         if let value = defaults.object(forKey: Key.allSpaces) as? Bool { showOnAllSpaces = value }
         if let value = defaults.object(forKey: Key.textPadding) as? Double { textPadding = value }
+        if let raw = defaults.string(forKey: Key.textMode), let value = TextContentMode(rawValue: raw) { textMode = value }
         if let value = defaults.string(forKey: Key.annotationColor) { annotationColorHex = value }
         if let value = defaults.object(forKey: Key.annotationLineWidth) as? Double { annotationLineWidth = value }
         if let value = defaults.object(forKey: Key.annotationFontSize) as? Double { annotationFontSize = value }

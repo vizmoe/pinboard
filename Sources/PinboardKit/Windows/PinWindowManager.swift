@@ -28,8 +28,8 @@ final class PinWindowManager {
     // MARK: - Creation
 
     @discardableResult
-    func createPin(content: PinContent, annotationData: Data? = nil) -> PinWindowController {
-        let controller = PinWindowController(content: content, annotationData: annotationData)
+    func createPin(content: PinContent, annotationData: Data? = nil, textMode: TextContentMode? = nil) -> PinWindowController {
+        let controller = PinWindowController(content: content, annotationData: annotationData, textMode: textMode)
         controller.manager = self
         let screen = targetScreen()
         let frame = controller.idealFrame(anchoredAt: nextAnchor(on: screen), on: screen)
@@ -157,7 +157,8 @@ final class PinWindowManager {
               dirtyHistoryRecords.remove(id) != nil else { return }
         let state = controller.contentView.captureState()
         do {
-            try store.upsert(id: id, content: state.content, annotationData: state.annotationData)
+            try store.upsert(id: id, content: state.content, annotationData: state.annotationData,
+                             textMode: state.textMode)
         } catch {
             dirtyHistoryRecords.insert(id)
             onHistoryError?(error)
@@ -168,7 +169,9 @@ final class PinWindowManager {
     @discardableResult
     func repin(recordID: UUID) -> PinWindowController? {
         guard let entry = historyStore?.entry(id: recordID) else { return nil }
-        return createPin(content: entry.content, annotationData: entry.annotationData)
+        // The record's stored mode wins: re-pinning reproduces how it looked,
+        // and records written before text modes stay rich text.
+        return createPin(content: entry.content, annotationData: entry.annotationData, textMode: entry.textMode)
     }
 
     /// Retention cleanup, throttled so directory scans stay rare.

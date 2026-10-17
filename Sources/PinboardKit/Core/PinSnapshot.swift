@@ -28,14 +28,18 @@ struct PinSnapshot: Codable {
     var frame: Rect
     var isHidden: Bool
     var opacity: Double
+    /// How `rtfData`/`plainText` are interpreted for text pins.
+    var textMode: TextContentMode = .richText
 
-    init(id: UUID, content: PinContent, frame: NSRect, isHidden: Bool, annotationData: Data? = nil, opacity: Double = 1.0) {
+    init(id: UUID, content: PinContent, frame: NSRect, isHidden: Bool, annotationData: Data? = nil,
+         opacity: Double = 1.0, textMode: TextContentMode = .richText) {
         self.id = id
         self.kind = content.kind
         self.frame = Rect(frame)
         self.isHidden = isHidden
         self.annotationData = annotationData
         self.opacity = opacity
+        self.textMode = textMode
         switch content {
         case .text(let attributed):
             rtfData = attributed.rtfdRepresentation() ?? attributed.rtfRepresentation()

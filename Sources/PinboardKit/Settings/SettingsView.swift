@@ -29,6 +29,17 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Text") {
+                Picker("Text mode", selection: $preferences.textMode) {
+                    ForEach(TextContentMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Text("Rich Text preserves fonts and colours. Markdown renders headings, lists, quotes and code; click a pin to edit its source.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("History") {
                 Picker("Keep history for", selection: $preferences.historyRetention) {
                     ForEach(Preferences.HistoryRetention.allCases) { option in

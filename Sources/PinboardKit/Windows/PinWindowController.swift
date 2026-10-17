@@ -25,12 +25,16 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// content's natural ratio. Can be switched on per pin from the menu.
     var isAspectLocked = false
 
-    init(content: PinContent, id: UUID = UUID(), annotationData: Data? = nil) {
+    init(content: PinContent, id: UUID = UUID(), annotationData: Data? = nil, textMode: TextContentMode? = nil) {
         self.id = id
         self.kind = content.kind
         switch content {
         case .text(let attributed):
-            contentView = TextPinView(attributedString: attributed)
+            // nil textMode means "follow the global default"; history re-pins
+            // pass the record's stored mode so they are reproducible.
+            contentView = TextPinView(attributedString: attributed,
+                                      mode: textMode ?? Preferences.shared.textMode,
+                                      hasExplicitMode: textMode != nil)
         case .image(let image):
             contentView = ImagePinView(image: image, annotationData: annotationData)
         }
@@ -205,6 +209,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 self.setBackgroundVisible(!self.rootView.drawsBackground)
             })
+            menu.addItem(markdownModeItem())
         }
         menu.addItem(.separator())
         menu.addItem(actionItem("Hide Pin") { [weak self] in
@@ -219,6 +224,21 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         let target = MenuActionTarget(handler: handler)
         item.target = target
         item.representedObject = target
+        return item
+    }
+
+    /// Per-window text mode switch. Checking it makes this pin render and edit
+    /// Markdown; the global default keeps applying only to pins that were never
+    /// switched here.
+    private func markdownModeItem() -> NSMenuItem {
+        let isMarkdown = (contentView as? TextPinView)?.textMode == .markdown
+        let item = actionItem("Markdown Mode") { [weak self] in
+            guard let self, let textView = self.contentView as? TextPinView else { return }
+            let mode: TextContentMode = textView.textMode == .markdown ? .richText : .markdown
+            textView.setTextMode(mode, explicit: true)
+            self.contentDidChange()
+        }
+        item.state = isMarkdown ? .on : .off
         return item
     }
 
@@ -280,6 +300,14 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         if prefs.showOnAllSpaces { behavior.insert(.canJoinAllSpaces) }
         panel.collectionBehavior = behavior
         panel.invalidateShadow()
+
+        // A pin the user never switched follows the global text mode, so a
+        // settings change re-renders it in place.
+        if let textView = contentView as? TextPinView,
+           !textView.hasExplicitTextMode, textView.textMode != prefs.textMode {
+            textView.setTextMode(prefs.textMode, explicit: false)
+            contentDidChange()
+        }
     }
 
     // MARK: - Persistence
@@ -287,7 +315,8 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     func snapshot() -> PinSnapshot {
         let state = contentView.captureState()
         return PinSnapshot(id: id, content: state.content, frame: panel.frame,
-                           isHidden: isPinHidden, annotationData: state.annotationData, opacity: opacity)
+                           isHidden: isPinHidden, annotationData: state.annotationData, opacity: opacity,
+                           textMode: state.textMode)
     }
 }
 

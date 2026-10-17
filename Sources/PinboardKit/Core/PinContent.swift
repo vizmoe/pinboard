@@ -21,9 +21,12 @@ enum PinKind: String, Codable {
 
 /// Editable payload shared by history and snapshots. Images retain their
 /// original pixels; crop and annotations travel separately from copy/export.
+/// For text, `textMode` says how the payload is interpreted: rich text is the
+/// attributed string itself, Markdown pins store their raw source there.
 struct PinContentState {
     var content: PinContent
     var annotationData: Data? = nil
+    var textMode: TextContentMode = .richText
 }
 
 extension NSAttributedString {

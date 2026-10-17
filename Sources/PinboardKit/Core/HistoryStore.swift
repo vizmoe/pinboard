@@ -10,9 +10,12 @@ struct HistoryRecord: Codable, Identifiable, Equatable {
     var updatedAt: Date
 
     /// Full plain text for text records — used for search and the list preview.
+    /// For Markdown records it is the raw source.
     var text: String?
     var imagePixelSize: CGSize?
     var hasAnnotations: Bool
+    /// nil for records written before text modes existed (treated as rich text).
+    var textMode: TextContentMode? = nil
 
     var preview: String {
         switch kind {
@@ -29,7 +32,8 @@ struct HistoryRecord: Codable, Identifiable, Equatable {
 /// `Application Support/Pinboard/History`:
 ///
 ///     <uuid>/record.json        metadata (loaded eagerly)
-///     <uuid>/content.rtf[d]     rich text payload
+///     <uuid>/content.rtf[d]     rich text payload (raw Markdown source for
+///                               Markdown records, stored as plain text RTF)
 ///     <uuid>/image.png          original image pixels
 ///     <uuid>/annotations.json   editable annotation state
 ///
@@ -92,16 +96,18 @@ final class HistoryStore {
         let dir = recordDirectory(id)
         switch record.kind {
         case .text:
+            let mode = record.textMode ?? .richText
             if let data = try? Data(contentsOf: dir.appendingPathComponent("content.rtfd")),
                let text = NSAttributedString(rtfd: data, documentAttributes: nil) {
-                return PinContentState(content: .text(text))
+                return PinContentState(content: .text(text), textMode: mode)
             }
             if let data = try? Data(contentsOf: dir.appendingPathComponent("content.rtf")),
                let text = NSAttributedString(rtf: data, documentAttributes: nil) {
-                return PinContentState(content: .text(text))
+                return PinContentState(content: .text(text), textMode: mode)
             }
             if let plain = record.text {
-                return PinContentState(content: .text(NSAttributedString(string: plain, attributes: ClipboardReader.defaultTextAttributes())))
+                return PinContentState(content: .text(NSAttributedString(string: plain, attributes: ClipboardReader.defaultTextAttributes())),
+                                       textMode: mode)
             }
             return nil
         case .image:
@@ -133,8 +139,13 @@ final class HistoryStore {
     /// Creates or replaces a record's payload. `createdAt` survives updates;
     /// `updatedAt` moves to now, which is what retention counts from. A failed
     /// save throws without publishing changes or destroying the previous payload.
+    ///
+    /// `textMode` describes text payloads. Omitting it keeps the record's
+    /// existing mode, so a caller that does not care about modes never
+    /// downgrades a Markdown record.
     @discardableResult
-    func upsert(id: UUID = UUID(), content: PinContent, annotationData: Data? = nil) throws -> UUID {
+    func upsert(id: UUID = UUID(), content: PinContent, annotationData: Data? = nil,
+                textMode: TextContentMode? = nil) throws -> UUID {
         var record = record(id: id) ?? HistoryRecord(
             id: id, kind: content.kind, createdAt: Date(), updatedAt: Date(),
             text: nil, imagePixelSize: nil, hasAnnotations: false
@@ -150,6 +161,7 @@ final class HistoryStore {
         switch content {
         case .text(let attributed):
             record.text = attributed.string
+            record.textMode = textMode ?? record.textMode ?? .richText
             record.imagePixelSize = nil
             record.hasAnnotations = false
             // Never downgrade attachments to RTF or mislabel RTF as RTFD.
@@ -162,6 +174,7 @@ final class HistoryStore {
             }
         case .image(let image):
             record.text = nil
+            record.textMode = nil
             record.imagePixelSize = image.pixelSize
             record.hasAnnotations = annotationData != nil
             guard let png = image.pngData() else { throw SaveError.encodingFailed(.image) }

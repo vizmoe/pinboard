@@ -35,7 +35,12 @@ final class HistoryViewModel: ObservableObject {
         pasteboard.clearContents()
         switch entry.content {
         case .text(let attributed):
-            pasteboard.writeObjects([attributed])
+            // A Markdown record's data is its source, matching the live pin.
+            if entry.textMode == .markdown {
+                pasteboard.setString(attributed.string, forType: .string)
+            } else {
+                pasteboard.writeObjects([attributed])
+            }
         case .image(let image):
             // Copy the composited result (crop + annotations), matching what
             // the user would get by copying the live pin.
@@ -169,7 +174,9 @@ struct HistoryView: View {
             }
             Divider()
             HStack {
-                Text(record.kind == .text ? "Text" : "Image")
+                Text(record.kind == .text
+                     ? (record.textMode == .markdown ? "Markdown" : "Text")
+                     : "Image")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("·")
                 Text(record.updatedAt, style: .date)
@@ -187,10 +194,13 @@ struct HistoryView: View {
 
     @ViewBuilder
     private func detailContent(_ record: HistoryRecord) -> some View {
-        switch model.detail(for: record)?.content {
+        let state = model.detail(for: record)
+        switch state?.content {
         case .text(let attributed):
-            Text(AttributedString(attributed))
-                .textSelection(.enabled)
+            Text(AttributedString(
+                state?.textMode == .markdown ? MarkdownRenderer.render(attributed.string) : attributed
+            ))
+            .textSelection(.enabled)
         case .image(let image):
             Image(nsImage: image)
                 .resizable()
