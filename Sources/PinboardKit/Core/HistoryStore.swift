@@ -71,9 +71,11 @@ final class HistoryStore {
             return
         }
         records = ids.compactMap { name in
+            guard let id = UUID(uuidString: name) else { return nil }
             let file = directory.appendingPathComponent(name).appendingPathComponent("record.json")
             guard let data = try? Data(contentsOf: file),
-                  let record = try? decoder.decode(HistoryRecord.self, from: data) else {
+                  let record = try? decoder.decode(HistoryRecord.self, from: data),
+                  record.id == id else {
                 return nil // a corrupt record loses only itself
             }
             return record
@@ -129,9 +131,10 @@ final class HistoryStore {
     // MARK: - Writing
 
     /// Creates or replaces a record's payload. `createdAt` survives updates;
-    /// `updatedAt` moves to now, which is what retention counts from.
+    /// `updatedAt` moves to now, which is what retention counts from. A failed
+    /// save throws without publishing changes or destroying the previous payload.
     @discardableResult
-    func upsert(id: UUID = UUID(), content: PinContent, annotationData: Data? = nil) -> UUID {
+    func upsert(id: UUID = UUID(), content: PinContent, annotationData: Data? = nil) throws -> UUID {
         var record = record(id: id) ?? HistoryRecord(
             id: id, kind: content.kind, createdAt: Date(), updatedAt: Date(),
             text: nil, imagePixelSize: nil, hasAnnotations: false
@@ -139,37 +142,43 @@ final class HistoryStore {
         record.updatedAt = Date()
         record.kind = content.kind
 
-        let dir = recordDirectory(id)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Drop stale payloads from a previous write before writing the new one.
-        for stale in ["content.rtf", "content.rtfd", "image.png", "annotations.json"] {
-            try? FileManager.default.removeItem(at: dir.appendingPathComponent(stale))
-        }
+        let fileManager = FileManager.default
+        let staged = directory.appendingPathComponent(".staging-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: staged, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: staged) }
 
         switch content {
         case .text(let attributed):
             record.text = attributed.string
             record.imagePixelSize = nil
             record.hasAnnotations = false
-            let rtf = attributed.rtfdRepresentation() ?? attributed.rtfRepresentation()
-            if let rtf {
-                let name = attributed.containsAttachments ? "content.rtfd" : "content.rtf"
-                try? rtf.write(to: dir.appendingPathComponent(name), options: .atomic)
+            // Never downgrade attachments to RTF or mislabel RTF as RTFD.
+            if attributed.containsAttachments {
+                guard let data = attributed.rtfdRepresentation() else { throw SaveError.encodingFailed(.text) }
+                try data.write(to: staged.appendingPathComponent("content.rtfd"))
+            } else {
+                guard let data = attributed.rtfRepresentation() else { throw SaveError.encodingFailed(.text) }
+                try data.write(to: staged.appendingPathComponent("content.rtf"))
             }
         case .image(let image):
             record.text = nil
             record.imagePixelSize = image.pixelSize
             record.hasAnnotations = annotationData != nil
-            if let png = image.pngData() {
-                try? png.write(to: dir.appendingPathComponent("image.png"), options: .atomic)
-            }
+            guard let png = image.pngData() else { throw SaveError.encodingFailed(.image) }
+            try png.write(to: staged.appendingPathComponent("image.png"))
             if let annotationData {
-                try? annotationData.write(to: dir.appendingPathComponent("annotations.json"), options: .atomic)
+                try annotationData.write(to: staged.appendingPathComponent("annotations.json"))
             }
         }
 
-        if let data = try? encoder.encode(record) {
-            try? data.write(to: dir.appendingPathComponent("record.json"), options: .atomic)
+        try encoder.encode(record).write(to: staged.appendingPathComponent("record.json"))
+        // Commit the whole record on the same volume. Readers see either the
+        // previous record or the complete replacement, never mixed payloads.
+        let destination = recordDirectory(id)
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: staged)
+        } else {
+            try fileManager.moveItem(at: staged, to: destination)
         }
         if let index = records.firstIndex(where: { $0.id == id }) {
             records[index] = record
@@ -179,6 +188,17 @@ final class HistoryStore {
         records.sort { $0.updatedAt > $1.updatedAt }
         onChange?()
         return id
+    }
+
+    private enum SaveError: LocalizedError {
+        case encodingFailed(PinKind)
+
+        var errorDescription: String? {
+            switch self {
+            case .encodingFailed(.text): return "The rich text could not be saved."
+            case .encodingFailed(.image): return "The image could not be saved as PNG."
+            }
+        }
     }
 
     func delete(id: UUID) {

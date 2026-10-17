@@ -10,6 +10,7 @@ final class PinWindowManager {
 
     /// nil disables history (tests opt in with a temp-directory store).
     var historyStore: HistoryStore?
+    var onHistoryWriteError: ((Error) -> Void)?
     /// Debounce for edit → history writes. Tests can shrink it to ~0 and call
     /// `flushHistorySync()` for a synchronous write.
     var historyWriteDelay: TimeInterval = 2.0
@@ -98,10 +99,11 @@ final class PinWindowManager {
 
     /// Records a new pin immediately; every later edit updates this same record.
     private func registerInHistory(_ controller: PinWindowController) {
-        guard let store = historyStore else { return }
-        let state = controller.contentView.captureState()
-        let recordID = store.upsert(content: state.content, annotationData: state.annotationData)
-        controller.historyRecordID = recordID
+        guard historyStore != nil else { return }
+        // Reserve the identity even if the first save fails, so a later edit
+        // or close can retry without abandoning this pin's history.
+        controller.historyRecordID = UUID()
+        writeHistory(for: controller)
         pruneHistoryIfDue()
     }
 
@@ -131,9 +133,13 @@ final class PinWindowManager {
     }
 
     private func writeHistory(for controller: PinWindowController) {
-        guard let id = controller.historyRecordID else { return }
+        guard let id = controller.historyRecordID, let store = historyStore else { return }
         let state = controller.contentView.captureState()
-        historyStore?.upsert(id: id, content: state.content, annotationData: state.annotationData)
+        do {
+            try store.upsert(id: id, content: state.content, annotationData: state.annotationData)
+        } catch {
+            onHistoryWriteError?(error)
+        }
     }
 
     /// Re-pins a history record as a new independent window + new record.

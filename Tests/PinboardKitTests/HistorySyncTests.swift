@@ -18,6 +18,7 @@ final class HistorySyncTests: XCTestCase {
     override func tearDown() {
         manager.closeAll()
         manager.historyStore = nil
+        manager.onHistoryWriteError = nil
         try? FileManager.default.removeItem(at: directory)
         super.tearDown()
     }
@@ -32,6 +33,24 @@ final class HistorySyncTests: XCTestCase {
         XCTAssertNotNil(pin.historyRecordID)
         XCTAssertEqual(store.records.count, 1)
         XCTAssertEqual(store.records[0].text, "original")
+    }
+
+    func testFailedInitialSaveReportsErrorAndCanRetryForTheSamePin() throws {
+        try Data("blocked".utf8).write(to: directory)
+        var errors: [Error] = []
+        manager.onHistoryWriteError = { errors.append($0) }
+
+        let pin = try makePin()
+        let recordID = try XCTUnwrap(pin.historyRecordID)
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertTrue(pin.isPinVisible, "a history failure must not discard the live pin")
+
+        try FileManager.default.removeItem(at: directory)
+        manager.flushHistorySync(for: pin)
+        XCTAssertEqual(store.records.map(\.id), [recordID])
+        XCTAssertEqual(store.record(id: recordID)?.text, "original")
+        XCTAssertEqual(errors.count, 1)
     }
 
     func testEditSyncsToSameRecord() throws {

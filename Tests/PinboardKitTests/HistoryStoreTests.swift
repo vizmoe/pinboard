@@ -24,7 +24,7 @@ final class HistoryStoreTests: XCTestCase {
     }
 
     func testCreatePersistsTextAndReloadsIt() throws {
-        let id = store.upsert(content: .text(makeText("persistent text")))
+        let id = try store.upsert(content: .text(makeText("persistent text")))
         XCTAssertEqual(store.records.count, 1)
 
         let reloaded = HistoryStore(directory: directory)
@@ -37,10 +37,27 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertNotNil(attributed.attribute(.foregroundColor, at: 0, effectiveRange: nil))
     }
 
+    func testTextAttachmentsSurviveRecordReplacementAndReload() throws {
+        let wrapper = FileWrapper(regularFileWithContents: try XCTUnwrap(TestImage.make(width: 12, height: 8).pngData()))
+        wrapper.preferredFilename = "attachment.png"
+        let text = NSMutableAttributedString(attributedString: makeText("with image "))
+        text.append(NSAttributedString(attachment: NSTextAttachment(fileWrapper: wrapper)))
+        let id = try store.upsert(content: .text(makeText("before")))
+        try store.upsert(id: id, content: .text(text))
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.appendingPathComponent(id.uuidString).path)
+        XCTAssertEqual(Set(files), ["record.json", "content.rtfd"])
+        let reloaded = HistoryStore(directory: directory)
+        guard case .text(let restored) = reloaded.entry(id: id)?.content else { return XCTFail("expected rich text") }
+        XCTAssertEqual(restored.string, text.string)
+        let attachment = try XCTUnwrap(restored.attribute(.attachment, at: restored.length - 1, effectiveRange: nil) as? NSTextAttachment)
+        XCTAssertEqual(attachment.fileWrapper?.regularFileContents, wrapper.regularFileContents)
+    }
+
     func testEditsUpdateSameRecord() throws {
-        let id = store.upsert(content: .text(makeText("first")))
-        store.upsert(id: id, content: .text(makeText("second")))
-        store.upsert(id: id, content: .text(makeText("third")))
+        let id = try store.upsert(content: .text(makeText("first")))
+        try store.upsert(id: id, content: .text(makeText("second")))
+        try store.upsert(id: id, content: .text(makeText("third")))
 
         XCTAssertEqual(store.records.count, 1, "edits must not create new entries")
         let record = try XCTUnwrap(store.record(id: id))
@@ -48,6 +65,58 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(record.createdAt, record.updatedAt)
         guard case .text(let attributed) = store.entry(id: id)?.content else { return XCTFail() }
         XCTAssertEqual(attributed.string, "third")
+    }
+
+    func testFailedEncodingPreservesCommittedImageAndMetadata() throws {
+        let id = try store.upsert(content: .image(TestImage.make(width: 40, height: 20)))
+        let record = try XCTUnwrap(store.record(id: id))
+        let imageURL = directory.appendingPathComponent(id.uuidString).appendingPathComponent("image.png")
+        let original = try Data(contentsOf: imageURL)
+        var changes = 0
+        store.onChange = { changes += 1 }
+
+        XCTAssertThrowsError(try store.upsert(id: id, content: .image(NSImage(size: .zero))))
+
+        XCTAssertEqual(store.record(id: id), record)
+        XCTAssertEqual(try? Data(contentsOf: imageURL), original)
+        XCTAssertEqual(changes, 0, "failed writes must not announce a new saved state")
+        let reloaded = HistoryStore(directory: directory)
+        XCTAssertNotNil(reloaded.entry(id: id), "the last committed image must survive a failed update")
+    }
+
+    func testUnwritableDestinationDoesNotPublishAnUnsavedRecord() throws {
+        // A regular file where the history directory should be makes failure
+        // deterministic without relying on the test user's permission level.
+        try Data("blocked".utf8).write(to: directory)
+        var changes = 0
+        store.onChange = { changes += 1 }
+
+        XCTAssertThrowsError(try store.upsert(content: .text(makeText())))
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertEqual(changes, 0)
+    }
+
+    func testReloadIgnoresUncommittedStagingDirectories() throws {
+        let id = try store.upsert(content: .text(makeText("committed")))
+        let staged = directory.appendingPathComponent(".staging-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: directory.appendingPathComponent(id.uuidString), to: staged)
+
+        let reloaded = HistoryStore(directory: directory)
+        XCTAssertEqual(reloaded.records.map(\.id), [id], "a staged copy must not become another record")
+    }
+
+    func testReplacingRecordRemovesStalePayloadsAndKeepsCreationDate() throws {
+        let id = try store.upsert(content: .image(TestImage.make(width: 20, height: 10)),
+                                  annotationData: Data("{}".utf8))
+        let createdAt = try XCTUnwrap(store.record(id: id)).createdAt
+        try store.upsert(id: id, content: .text(makeText("replacement")))
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.appendingPathComponent(id.uuidString).path)
+        XCTAssertEqual(Set(files), ["record.json", "content.rtf"])
+        XCTAssertEqual(store.record(id: id)?.createdAt, createdAt)
+        let reloaded = HistoryStore(directory: directory)
+        guard case .text(let text) = reloaded.entry(id: id)?.content else { return XCTFail("expected text") }
+        XCTAssertEqual(text.string, "replacement")
     }
 
     func testImageRoundTripWithAnnotations() throws {
@@ -63,7 +132,7 @@ final class HistoryStoreTests: XCTestCase {
         let payload = AnnotationStore.Payload(annotations: [annotation], cropRect: nil)
         let annotationData = try XCTUnwrap(JSONEncoder().encode(payload))
 
-        let id = store.upsert(content: .image(image), annotationData: annotationData)
+        let id = try store.upsert(content: .image(image), annotationData: annotationData)
         let reloaded = HistoryStore(directory: directory)
         let entry = try XCTUnwrap(reloaded.entry(id: id))
         guard case .image(let restored) = entry.content else { return XCTFail("expected image") }
@@ -77,7 +146,7 @@ final class HistoryStoreTests: XCTestCase {
     }
 
     func testDeleteRemovesFiles() throws {
-        let id = store.upsert(content: .text(makeText()))
+        let id = try store.upsert(content: .text(makeText()))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(id.uuidString).path))
         store.delete(id: id)
         XCTAssertTrue(store.records.isEmpty)
@@ -85,8 +154,8 @@ final class HistoryStoreTests: XCTestCase {
     }
 
     func testPruneRespectsCutoffAndLiveIDs() throws {
-        let old = store.upsert(content: .text(makeText("old")))
-        let live = store.upsert(content: .text(makeText("live")))
+        let old = try store.upsert(content: .text(makeText("old")))
+        let live = try store.upsert(content: .text(makeText("live")))
         store.prune(olderThan: Date().addingTimeInterval(60), excluding: [live])
 
         XCTAssertNil(store.record(id: old))
@@ -94,8 +163,8 @@ final class HistoryStoreTests: XCTestCase {
     }
 
     func testCorruptRecordLosesOnlyItself() throws {
-        let good = store.upsert(content: .text(makeText("good")))
-        let bad = store.upsert(content: .text(makeText("bad")))
+        let good = try store.upsert(content: .text(makeText("good")))
+        let bad = try store.upsert(content: .text(makeText("bad")))
         try Data("not json".utf8).write(
             to: directory.appendingPathComponent(bad.uuidString).appendingPathComponent("record.json")
         )
@@ -105,9 +174,9 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.records[0].id, good)
     }
 
-    func testSearchFiltersByText() {
-        store.upsert(content: .text(makeText("meeting notes for Friday")))
-        store.upsert(content: .text(makeText("grocery list")))
+    func testSearchFiltersByText() throws {
+        try store.upsert(content: .text(makeText("meeting notes for Friday")))
+        try store.upsert(content: .text(makeText("grocery list")))
         XCTAssertEqual(store.filtered(query: "meeting").count, 1)
         XCTAssertEqual(store.filtered(query: "").count, 2)
     }
