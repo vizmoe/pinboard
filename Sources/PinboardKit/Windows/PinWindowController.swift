@@ -48,8 +48,8 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         contentView.pinController = self
         rootView.pinController = self
         // Text pins are fully transparent: only the glyphs are on screen.
-        rootView.drawsBackground = false
-        rootView.drawsBorder = kind == .image
+        // `applyPreferences` at the end of init paints the Markdown theme's
+        // paper instead, when the theme has one.
         rootView.usesHoverBackground = kind == .text
         rootView.cornerRadius = 6
         rootView.install(contentView: contentView)
@@ -311,6 +311,30 @@ final class PinWindowController: NSObject, NSWindowDelegate {
 
     /// Opt a text pin back into the opaque "paper" look, per pin.
     func setBackgroundVisible(_ visible: Bool) {
+        hasExplicitBackground = true
+        applyBackground(visible: visible)
+    }
+
+    /// Set once the user toggles this pin's background: a theme change then
+    /// leaves their choice alone.
+    private var hasExplicitBackground = false
+
+    /// The Markdown theme's paper for this pin, or nil when it keeps the
+    /// standard background (not a Markdown pin, or a theme without paper).
+    private var themedBackground: NSColor? {
+        guard let textView = contentView as? TextPinView, textView.textMode == .markdown else { return nil }
+        return Preferences.shared.markdownTheme.background
+    }
+
+    /// Applies the Markdown theme's paper after a mode or theme change. A
+    /// background the user chose for this pin wins.
+    func applyThemeBackground() {
+        guard !hasExplicitBackground else { return }
+        applyBackground(visible: themedBackground != nil)
+    }
+
+    private func applyBackground(visible: Bool) {
+        rootView.themedBackground = themedBackground
         rootView.drawsBackground = visible
         rootView.drawsBorder = visible || kind == .image
         panel.hasShadow = Preferences.shared.showShadow && rendersOpaqueContent
@@ -337,6 +361,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
             textView.setTextMode(prefs.textMode, explicit: false)
             contentDidChange()
         }
+        applyThemeBackground()
     }
 
     // MARK: - Persistence

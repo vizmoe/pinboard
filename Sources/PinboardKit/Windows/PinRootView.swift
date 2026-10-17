@@ -13,6 +13,10 @@ final class PinRootView: NSView {
     var drawsBackground = true { didSet { needsDisplay = true } }
     var drawsBorder = true { didSet { needsDisplay = true } }
 
+    /// Paper supplied by the content — a Markdown theme paints its own. nil
+    /// keeps the standard text background.
+    var themedBackground: NSColor? { didSet { needsDisplay = true } }
+
     /// Transparent pins paint a barely visible wash while the pointer is over
     /// them or they are being edited, so the window bounds stay discoverable.
     var usesHoverBackground = false { didSet { needsDisplay = true } }
@@ -64,13 +68,14 @@ final class PinRootView: NSView {
     override func updateLayer() {
         guard let layer else { return }
         layer.cornerRadius = cornerRadius
-        layer.backgroundColor = backgroundColorForState.cgColor
+        layer.backgroundColor = effectiveBackgroundColor.cgColor
         layer.borderWidth = drawsBorder ? 1 : 0
         layer.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
     }
 
-    private var backgroundColorForState: NSColor {
-        if drawsBackground { return .textBackgroundColor }
+    /// The colour the pin body paints right now.
+    var effectiveBackgroundColor: NSColor {
+        if drawsBackground { return themedBackground ?? .textBackgroundColor }
         guard usesHoverBackground, isPointerInside || isEditingContent else { return .clear }
         return NSColor.labelColor.withAlphaComponent(0.07)
     }

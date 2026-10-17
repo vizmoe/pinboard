@@ -38,6 +38,16 @@ struct SettingsView: View {
                 Text("Rich Text preserves fonts and colours. Plain Text drops formatting and uses the default font. Markdown renders headings, lists, quotes and code; click a pin to edit its source.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Picker("Markdown theme", selection: $preferences.markdownTheme) {
+                    ForEach(MarkdownTheme.allCases) { theme in
+                        Text(theme.title).tag(theme)
+                    }
+                }
+                MarkdownThemePreview(theme: preferences.markdownTheme)
+                Text("The theme colours Markdown pins and their paper. A pin switched to a transparent background keeps it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("History") {
@@ -75,5 +85,43 @@ struct SettingsView: View {
         } else {
             hotkeyError = "\"\(shortcut.displayString)\" is already in use. Pick another combination."
         }
+    }
+}
+
+/// A small sample of how a theme paints a Markdown pin.
+private struct MarkdownThemePreview: View {
+    let theme: MarkdownTheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Heading")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Color(nsColor: theme.text))
+            HStack(spacing: 0) {
+                Text("Body text with a ")
+                Text("link").foregroundColor(Color(nsColor: theme.link))
+                Text(" and ")
+                Text("code")
+                    .font(.system(size: 11, design: .monospaced))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(RoundedRectangle(cornerRadius: 3).fill(Color(nsColor: theme.codeBackground)))
+            }
+            .font(.system(size: 12))
+            .foregroundColor(Color(nsColor: theme.text))
+            Text("Muted text")
+                .font(.system(size: 12))
+                .foregroundColor(Color(nsColor: theme.secondaryText))
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: theme.background ?? .textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color(nsColor: .separatorColor))
+        )
     }
 }

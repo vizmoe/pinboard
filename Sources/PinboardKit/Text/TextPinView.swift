@@ -38,12 +38,30 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     var editableTextView: NSTextView { textView }
 
     /// Monospaced while the raw Markdown source is being edited, so the source
-    /// reads as code rather than as the rendered document.
+    /// reads as code rather than as the rendered document. Its colour follows
+    /// the theme, or the source would vanish on a dark paper.
     static let sourceFont = TextDefaults.monospacedFont
 
-    private static var sourceAttributes: [NSAttributedString.Key: Any] {
-        [.font: sourceFont, .foregroundColor: NSColor.labelColor]
+    private static func sourceAttributes(for theme: MarkdownTheme) -> [NSAttributedString.Key: Any] {
+        [.font: sourceFont, .foregroundColor: theme.text]
     }
+
+    private var sourceAttributes: [NSAttributedString.Key: Any] {
+        Self.sourceAttributes(for: markdownTheme)
+    }
+
+    /// The palette a Markdown pin renders and edits with.
+    private var markdownTheme: MarkdownTheme { Preferences.shared.markdownTheme }
+
+    /// The theme the visible document was last built with; every preference
+    /// change lands in `preferencesChanged`, and this keeps the re-render a
+    /// no-op for unrelated ones.
+    private var appliedTheme: MarkdownTheme?
+
+    /// How AppKit is about to paint `.link` runs (underline, pointing hand),
+    /// captured before any theme touches it. A themed pin swaps only the
+    /// colour: run attributes are ignored for links.
+    private let defaultLinkTextAttributes: [NSAttributedString.Key: Any]
 
     init(attributedString: NSAttributedString, mode: TextContentMode = .richText, hasExplicitMode: Bool = false) {
         textMode = mode
@@ -60,6 +78,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         storage.addLayoutManager(layoutManager)
         layoutManager.addTextContainer(container)
         textView = PinTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200), textContainer: container)
+        defaultLinkTextAttributes = textView.linkTextAttributes ?? [:]
         super.init(frame: .zero)
 
         textView.pinView = self
@@ -170,14 +189,16 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     /// The rendered Markdown document, regardless of editing state. In the
     /// other modes this is simply the canonical text.
     var renderedAttributedString: NSAttributedString {
-        textMode == .markdown ? MarkdownRenderer.render(sourceText) : attributedString
+        textMode == .markdown
+            ? MarkdownRenderer.render(sourceText, style: .init(theme: markdownTheme))
+            : attributedString
     }
 
     /// What the text stack currently draws (or edits).
     private var displayAttributedString: NSAttributedString {
         if isEditing {
             return textMode == .markdown
-                ? NSAttributedString(string: sourceText, attributes: Self.sourceAttributes)
+                ? NSAttributedString(string: sourceText, attributes: sourceAttributes)
                 : attributedString
         }
         // Idle: the storage is exactly what is shown — for Markdown that is
@@ -216,6 +237,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         // A Markdown document can carry images, and a switch into rich text
         // keeps them; anything still unresolved is picked up here.
         resolveDeferredImages()
+        pinController?.applyThemeBackground()
         pinController?.refreshChrome()
     }
 
@@ -263,10 +285,29 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
             textView.typingAttributes = ClipboardReader.defaultTextAttributes()
         case .markdown:
             sourceText = attributed.string
-            textView.textStorage?.setAttributedString(MarkdownRenderer.render(sourceText))
-            textView.typingAttributes = Self.sourceAttributes
+            textView.textStorage?.setAttributedString(
+                MarkdownRenderer.render(sourceText, style: .init(theme: markdownTheme))
+            )
+            textView.typingAttributes = sourceAttributes
+            appliedTheme = markdownTheme
         }
+        applyEditorColors(for: mode)
         syncWrapWidth()
+    }
+
+    /// Caret and selection colours that stay readable on the pin's paper: the
+    /// Markdown source editor sits on the theme's background.
+    private func applyEditorColors(for mode: TextContentMode) {
+        let themed = mode == .markdown
+        textView.insertionPointColor = themed ? markdownTheme.text : .textColor
+        textView.selectedTextAttributes = [
+            .backgroundColor: (themed ? markdownTheme.selection : nil) ?? .selectedTextBackgroundColor
+        ]
+        // AppKit draws `.link` runs with `linkTextAttributes`, not their own
+        // colour, so links keep the theme's blue instead of the system accent.
+        var linkAttributes = defaultLinkTextAttributes
+        linkAttributes[.foregroundColor] = themed ? markdownTheme.link : NSColor.linkColor
+        textView.linkTextAttributes = linkAttributes
     }
 
     // MARK: - Editing
@@ -278,9 +319,9 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
             if textMode == .markdown {
                 // Swap the rendered document for the source the user edits.
                 textView.isRichText = false
-                textView.typingAttributes = Self.sourceAttributes
+                textView.typingAttributes = sourceAttributes
                 textView.textStorage?.setAttributedString(
-                    NSAttributedString(string: sourceText, attributes: Self.sourceAttributes)
+                    NSAttributedString(string: sourceText, attributes: sourceAttributes)
                 )
             }
             textView.setEditableMode()
@@ -304,8 +345,10 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         if textMode == .markdown {
             sourceText = textView.string
             textView.isRichText = false
-            textView.textStorage?.setAttributedString(MarkdownRenderer.render(sourceText))
-            textView.typingAttributes = Self.sourceAttributes
+            textView.textStorage?.setAttributedString(
+                MarkdownRenderer.render(sourceText, style: .init(theme: markdownTheme))
+            )
+            textView.typingAttributes = sourceAttributes
         }
         textView.setReadOnlyMode()
         pinController?.rootView.isEditingContent = false
@@ -560,6 +603,29 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     @objc private func preferencesChanged() {
         applyPadding()
+        applyMarkdownThemeIfNeeded()
+    }
+
+    /// Repaints an open Markdown pin when Settings switches the theme. Images
+    /// the document references are resolved again, since the render recreates
+    /// their placeholders.
+    private func applyMarkdownThemeIfNeeded() {
+        guard textMode == .markdown, appliedTheme != markdownTheme else { return }
+        if isEditing {
+            // Keep the live source and selection; only its colours change.
+            let selection = textView.selectedRange()
+            textView.textStorage?.setAttributedString(
+                NSAttributedString(string: textView.string, attributes: sourceAttributes)
+            )
+            textView.setSelectedRange(selection)
+            textView.typingAttributes = sourceAttributes
+            applyEditorColors(for: .markdown)
+            appliedTheme = markdownTheme
+            textView.needsDisplay = true
+        } else {
+            apply(canonical: NSAttributedString(string: sourceText), mode: .markdown)
+            resolveDeferredImages()
+        }
     }
 
     static func measure(_ text: NSAttributedString, maxWidth: CGFloat) -> CGSize {

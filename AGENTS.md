@@ -57,7 +57,8 @@ library so it can be unit tested (`@testable import PinboardKit`).
   typography), `DeferredImages` (attachment tags for images that load later)
 - `Markdown` — `MarkdownRenderer` (Foundation cmark `PresentationIntent` walk →
   display-only attributed string, unit tested; `![alt](url)` becomes a
-  `DeferredImages` placeholder)
+  `DeferredImages` placeholder) and `MarkdownTheme` (the colour palettes
+  rendered pins can wear)
 - `Image` — `ImagePinView` plus `Image/Annotation` (model, store with undo,
   renderer, canvas, toolbar, Core Image effects)
 - `Settings` — SwiftUI preferences window
@@ -96,8 +97,9 @@ Window management never inspects content specifics: pin views conform to
 - Annotation style is per-annotation (`Annotation.style`), editable via the
   toolbar when a shape is selected (`canvas.updateSelectedStyle` — never the
   global `Preferences` seed). `AnnotationStyle.fontName` is optional so old
-  payloads still decode. Settings hosts Keyboard Shortcuts, Text (mode) and
-  History; other preferences persist silently as fixed defaults.
+  payloads still decode. Settings hosts Keyboard Shortcuts, Text (mode and
+  Markdown theme) and History; other preferences persist silently as fixed
+  defaults.
 - Text pins have three modes (`TextContentMode`). A Markdown pin's canonical
   content is the **raw source** (kept as the `.text` attributed string), the
   idle display is `MarkdownRenderer.render(source)`, and editing shows the
@@ -112,6 +114,19 @@ Window management never inspects content specifics: pin views conform to
   `hasExplicitTextMode` is false; the context menu's *Text Mode* submenu sets
   it explicitly. `setTextMode` keeps a one-step `modeBackup` so switching back
   before the next edit restores the exact previous representation.
+- Markdown themes (`MarkdownTheme`, picked in Settings → Text, persisted as
+  `Preferences.markdownTheme`) are display-only, like the rendered document:
+  they colour the render, the raw-source editor (text, caret, selection,
+  `linkTextAttributes` — AppKit paints `.link` runs with those, not the run
+  colour) and the pin paper (`PinRootView.themedBackground`). `.standard`
+  keeps the system colours and the usual transparent pin;
+  `everforestDarkHard` paints its bg0 paper, and
+  `PinWindowController.applyThemeBackground` then makes such pins opaque —
+  unless the user toggled the pin's own background (`hasExplicitBackground`),
+  which always wins. Rich and plain pins keep their own colours, and switching
+  a themed pin to rich text re-renders with the standard palette (light text
+  would otherwise sit on a transparent pin). The palette literals are the
+  published Everforest Dark Hard values.
 - History: one directory per record under
   `~/Library/Application Support/Pinboard/History/<uuid>/` (`record.json` +
   payload files) so a corrupt record can only lose itself. Pins link to their
@@ -164,6 +179,9 @@ Window management never inspects content specifics: pin views conform to
 
 ## Verification notes
 
+- A running Pinboard keeps its old binary: after changing app code, rebuild
+  (`./scripts/build-app.sh`) and relaunch the instance (`pkill -x Pinboard`
+  then `open .build/Pinboard.app`) so the visible app matches the source.
 - The agent sandbox has no Screen Recording permission, so `screencapture` fails.
   Window geometry can still be inspected with `CGWindowListCopyWindowInfo`
   (owner PID + bounds + layer), which is how pin creation/hide/show was verified.

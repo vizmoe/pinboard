@@ -20,6 +20,10 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
   globally under **Settings → Text**,
   or per pin via the window's context menu; a per-pin switch stops that
   window from following the global default.
+- **Markdown themes** — colour a whole Markdown pin, paper included:
+  *Default* (system colours) and *Everforest Dark Hard*, picked with a live
+  preview under **Settings → Text**. The source you edit stays the same; a
+  pin you switched to a transparent background keeps it.
 - **Image annotation** — rectangle, ellipse, arrow, line, freehand, text,
   highlight, blur, mosaic and crop, all non-destructive and undoable.
 - **Charts in pasted messages** — when a copied message ships its image only
