@@ -108,6 +108,34 @@ final class ClipboardReaderTests: XCTestCase {
         XCTAssertEqual(text.string, "纯文本")
     }
 
+    func testHTMLRestoresWhitespaceAroundSupplementaryUnicodeAndKeepsFormatting() throws {
+        let pasteboard = makePasteboard()
+        let plain = "  👩🏽‍💻\t𠮷野\n\n🇨🇳 cafe\u{301}  "
+        pasteboard.declareTypes([.html, .string], owner: nil)
+        pasteboard.setString("<b>👩🏽‍💻</b> 𠮷野 🇨🇳 cafe\u{301}", forType: .html)
+        pasteboard.setString(plain, forType: .string)
+
+        guard case .text(let text)? = ClipboardReader.read(from: pasteboard) else {
+            return XCTFail("expected rich text")
+        }
+        XCTAssertEqual(text.string, plain)
+        let emoji = (text.string as NSString).range(of: "👩🏽‍💻")
+        let font = text.attribute(.font, at: emoji.location, effectiveRange: nil) as? NSFont
+        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+    }
+
+    func testHTMLWithEmojiIgnoresUnrelatedPlainText() throws {
+        let pasteboard = makePasteboard()
+        pasteboard.declareTypes([.html, .string], owner: nil)
+        pasteboard.setString("<b>😀 rich</b>", forType: .html)
+        pasteboard.setString("😀 unrelated", forType: .string)
+
+        guard case .text(let text)? = ClipboardReader.read(from: pasteboard) else {
+            return XCTFail("expected rich text")
+        }
+        XCTAssertEqual(text.string, "😀 rich")
+    }
+
     func testUnsupportedContentReturnsNil() {
         let pasteboard = makePasteboard()
         pasteboard.declareTypes([NSPasteboard.PasteboardType("com.example.unknown")], owner: nil)

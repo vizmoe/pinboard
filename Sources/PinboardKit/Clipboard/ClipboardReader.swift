@@ -95,19 +95,20 @@ enum ClipboardReader {
     private static func wordRuns(in string: NSString) -> [NSRange] {
         let whitespace = CharacterSet.whitespacesAndNewlines
         var runs: [NSRange] = []
-        var index = 0
-        while index < string.length {
-            if let scalar = UnicodeScalar(string.character(at: index)), whitespace.contains(scalar) {
-                index += 1
-                continue
+        var offset = 0
+        var start: Int?
+        // Walk whole scalars, but retain UTF-16 offsets for attributed ranges.
+        // A surrogate half is not a scalar and must never stall the scan.
+        for scalar in (string as String).unicodeScalars {
+            if whitespace.contains(scalar) {
+                if let start { runs.append(NSRange(location: start, length: offset - start)) }
+                start = nil
+            } else if start == nil {
+                start = offset
             }
-            var end = index
-            while end < string.length,
-                  let scalar = UnicodeScalar(string.character(at: end)),
-                  !whitespace.contains(scalar) { end += 1 }
-            runs.append(NSRange(location: index, length: end - index))
-            index = end
+            offset += scalar.utf16.count
         }
+        if let start { runs.append(NSRange(location: start, length: offset - start)) }
         return runs
     }
 
