@@ -51,6 +51,7 @@ final class HistoryViewModel: ObservableObject {
 
     func delete(_ id: HistoryRecord.ID) {
         store.delete(id: id)
+        manager.detachHistoryRecord(id)
         if selection == id { selection = nil }
     }
 

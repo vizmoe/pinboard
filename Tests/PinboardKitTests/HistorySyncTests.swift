@@ -221,4 +221,45 @@ final class HistorySyncTests: XCTestCase {
         pin.showPin()
         XCTAssertEqual(store.records.count, 1)
     }
+
+    func testDeletedHistoryIsNotRecreatedByLivePinEditsOrClose() throws {
+        let pin = try makePin()
+        let other = try makePin()
+        let recordID = try XCTUnwrap(pin.historyRecordID)
+        let otherID = try XCTUnwrap(other.historyRecordID)
+        let view = try XCTUnwrap(pin.contentView as? TextPinView)
+        view.beginEditing(at: nil)
+        view.editableTextView.insertText("pending", replacementRange: NSRange(location: 0, length: 8))
+        let model = HistoryViewModel(store: store, manager: manager)
+        model.selection = recordID
+
+        model.delete(recordID)
+
+        XCTAssertNil(model.selection)
+        XCTAssertNil(pin.historyRecordID)
+        XCTAssertTrue(pin.isPinVisible)
+        view.editableTextView.insertText("after deletion", replacementRange: NSRange(location: 0, length: 7))
+        manager.flushAllHistorySyncs()
+        pin.closePin()
+
+        XCTAssertNil(store.record(id: recordID))
+        XCTAssertEqual(store.records.map(\.id), [otherID])
+        XCTAssertNil(HistoryStore(directory: directory).entry(id: recordID))
+    }
+
+    func testClearingHistoryKeepsLivePinsAndRemovesClosedRecords() throws {
+        let closed = try makePin()
+        let closedID = try XCTUnwrap(closed.historyRecordID)
+        closed.closePin()
+        let live = try makePin()
+        let liveID = try XCTUnwrap(live.historyRecordID)
+        let model = HistoryViewModel(store: store, manager: manager)
+
+        model.clearAll()
+
+        XCTAssertNil(store.record(id: closedID))
+        XCTAssertEqual(store.records.map(\.id), [liveID])
+        XCTAssertEqual(live.historyRecordID, liveID)
+        XCTAssertTrue(live.isPinVisible)
+    }
 }

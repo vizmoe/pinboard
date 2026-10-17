@@ -100,6 +100,16 @@ final class PinWindowManager {
         Set(pins.compactMap(\.historyRecordID))
     }
 
+    /// Explicitly deleted history must not be recreated by an open pin's
+    /// pending write, later edits, or close. The pin itself stays usable.
+    func detachHistoryRecord(_ id: UUID) {
+        pendingHistoryWrites.removeValue(forKey: id)?.cancel()
+        dirtyHistoryRecords.remove(id)
+        for controller in pins where controller.historyRecordID == id {
+            controller.historyRecordID = nil
+        }
+    }
+
     /// Records a new pin immediately; every later edit updates this same record.
     private func registerInHistory(_ controller: PinWindowController) {
         guard historyStore != nil else { return }
