@@ -5,8 +5,10 @@ import AppKit
 /// Foundation's parser (cmark) exposes the document structure as
 /// `PresentationIntent`s attached to each run. This renderer walks those runs
 /// and turns them into AppKit fonts, paragraph styles, list markers and quote
-/// bars. The source string is never mutated: a Markdown pin keeps the raw text
-/// as its canonical content and re-renders from it on demand.
+/// bars — and an `![alt](url)` into an attachment tagged by `DeferredImages`,
+/// whose pixels the pin resolves later. The source string is never mutated: a
+/// Markdown pin keeps the raw text as its canonical content and re-renders
+/// from it on demand.
 ///
 /// The output is for display and measuring; it is not fed back into the
 /// document. Copying a Markdown pin copies its source instead.
@@ -309,9 +311,34 @@ enum MarkdownRenderer {
                 ]))
                 return
             }
+            // An image becomes an empty attachment carrying its URL and alt
+            // text; the pin resolves the pixels once it has a window. cmark
+            // keeps the alt text in the run's characters — an image without
+            // alt text only carries the object-replacement character.
+            if let url = run.imageURL {
+                let alt = text.replacingOccurrences(of: "\u{FFFC}", with: "")
+                content.append(Self.imagePlaceholder(url: url, alt: alt, style: style))
+                return
+            }
             content.append(NSAttributedString(string: text, attributes: Self.attributes(
                 for: run, inline: inline, style: style
             )))
+        }
+
+        /// The display form of `![alt](url)`: an empty attachment tagged with
+        /// its source, so `TextPinView` can fetch, cache and size it later.
+        private static func imagePlaceholder(url: URL, alt: String, style: Style) -> NSAttributedString {
+            let placeholder = NSMutableAttributedString(attachment: NSTextAttachment())
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: MarkdownRenderer.plainFont(style.baseFont),
+                .foregroundColor: style.textColor,
+                DeferredImages.sourceAttribute: url.absoluteString
+            ]
+            if !alt.isEmpty {
+                attributes[DeferredImages.altAttribute] = alt
+            }
+            placeholder.addAttributes(attributes, range: NSRange(location: 0, length: placeholder.length))
+            return placeholder
         }
 
         private static func attributes(

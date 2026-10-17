@@ -38,11 +38,6 @@ enum ClipboardReader {
         return nil
     }
 
-    /// Set on the object-replacement range of an `<img>` whose pixels still
-    /// have to be resolved; the value is the raw `src`. `TextPinView` reads it
-    /// once the pin exists, because remote images need an asynchronous fetch.
-    static let htmlImageSourceAttribute = NSAttributedString.Key("Pinboard.HTMLImageSource")
-
     private static func readHTML(from pasteboard: NSPasteboard) -> NSAttributedString? {
         guard let data = pasteboard.data(forType: .html),
               let rich = try? NSAttributedString(
@@ -90,7 +85,7 @@ enum ClipboardReader {
                 result.deleteCharacters(in: range)
                 continue
             }
-            result.addAttribute(htmlImageSourceAttribute, value: source, range: range)
+            result.addAttribute(DeferredImages.sourceAttribute, value: source, range: range)
         }
         return result
     }

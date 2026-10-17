@@ -54,14 +54,14 @@ final class HTMLImageSourceTests: XCTestCase {
     func testDataURIDecodesImageBytes() throws {
         let png = try XCTUnwrap(Self.makePNG(width: 20, height: 10, color: .orange))
         let source = "data:image/png;base64,\(png.base64EncodedString())"
-        XCTAssertEqual(HTMLImages.dataURI(source), png)
-        XCTAssertEqual(HTMLImages.localData(from: source), png)
+        XCTAssertEqual(DeferredImages.dataURI(source), png)
+        XCTAssertEqual(DeferredImages.localData(from: source), png)
     }
 
     func testDataURINonImageAndPlainPayload() {
-        XCTAssertNil(HTMLImages.dataURI("data:text/plain;base64,\(Data("hi".utf8).base64EncodedString())"))
-        XCTAssertEqual(HTMLImages.dataURI("data:image/svg+xml,%3Csvg/%3E"), Data("<svg/>".utf8))
-        XCTAssertNil(HTMLImages.dataURI("data:image/png;base64"))
+        XCTAssertNil(DeferredImages.dataURI("data:text/plain;base64,\(Data("hi".utf8).base64EncodedString())"))
+        XCTAssertEqual(DeferredImages.dataURI("data:image/svg+xml,%3Csvg/%3E"), Data("<svg/>".utf8))
+        XCTAssertNil(DeferredImages.dataURI("data:image/png;base64"))
     }
 
     func testLocalDataReadsFilesButNotRemoteURLs() throws {
@@ -71,8 +71,8 @@ final class HTMLImageSourceTests: XCTestCase {
         try png.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        XCTAssertEqual(HTMLImages.localData(from: url.absoluteString), png)
-        XCTAssertNil(HTMLImages.localData(from: "https://example.com/chart.png"))
+        XCTAssertEqual(DeferredImages.localData(from: url.absoluteString), png)
+        XCTAssertNil(DeferredImages.localData(from: "https://example.com/chart.png"))
     }
 
     func testLoaderRefusesNonWebSchemes() {
@@ -157,7 +157,7 @@ final class HTMLImagePinTests: XCTestCase {
             return XCTFail("expected text content")
         }
         var tagged: String?
-        text.enumerateAttribute(ClipboardReader.htmlImageSourceAttribute, in: text.fullRange, options: []) { value, range, _ in
+        text.enumerateAttribute(DeferredImages.sourceAttribute, in: text.fullRange, options: []) { value, range, _ in
             guard value != nil else { return }
             XCTAssertTrue(text.attribute(.attachment, at: range.location, effectiveRange: nil) is NSTextAttachment)
             tagged = value as? String
@@ -183,7 +183,7 @@ final class HTMLImagePinTests: XCTestCase {
 
         var stillTagged = false
         view.editableTextView.textStorage?.enumerateAttribute(
-            ClipboardReader.htmlImageSourceAttribute,
+            DeferredImages.sourceAttribute,
             in: view.editableTextView.textStorage?.fullRange ?? NSRange(), options: []
         ) { value, _, _ in stillTagged = value != nil }
         XCTAssertFalse(stillTagged, "a resolved image is not resolved twice")
@@ -232,7 +232,7 @@ final class HTMLImagePinTests: XCTestCase {
     private func stillDeferred(_ view: TextPinView) -> Bool {
         var tagged = false
         view.editableTextView.textStorage?.enumerateAttribute(
-            ClipboardReader.htmlImageSourceAttribute,
+            DeferredImages.sourceAttribute,
             in: view.editableTextView.textStorage?.fullRange ?? NSRange(), options: []
         ) { value, _, _ in if value != nil { tagged = true } }
         return tagged
@@ -312,7 +312,7 @@ final class HTMLImagePinTests: XCTestCase {
             return XCTFail("expected text content")
         }
         var tagged = false
-        text.enumerateAttribute(ClipboardReader.htmlImageSourceAttribute, in: text.fullRange, options: []) { value, _, _ in
+        text.enumerateAttribute(DeferredImages.sourceAttribute, in: text.fullRange, options: []) { value, _, _ in
             if value != nil { tagged = true }
         }
         XCTAssertFalse(tagged)

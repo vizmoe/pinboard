@@ -16,7 +16,8 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
 - **Three text modes** — Rich Text keeps everything above; Plain Text drops
   formatting and shows the text in the default font (PingFang SC 14);
   Markdown idles as a rendered document (headings, lists, tables, code,
-  links) and edits as raw source. Switch globally under **Settings → Text**,
+  links — and `![alt](url)` pictures) and edits as raw source. Switch
+  globally under **Settings → Text**,
   or per pin via the window's context menu; a per-pin switch stops that
   window from following the global default.
 - **Image annotation** — rectangle, ellipse, arrow, line, freehand, text,
@@ -24,7 +25,7 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
 - **Charts in pasted messages** — when a copied message ships its image only
   as an `<img>` reference (typical for Discord, Slack and web chat), the
   picture is fetched and shown inside the pin instead of an empty
-  placeholder.
+  placeholder. Markdown pins show `![alt](url)` pictures the same way.
 - **Pin history** — every pin is recorded locally (latest edited state,
   including editable annotation data), searchable, re-pinnable, with
   configurable retention (default 30 days).
@@ -87,10 +88,10 @@ If `xcode-select` points at CommandLineTools, prefix SwiftPM commands with
 ## Data & Privacy
 
 All clipboard processing happens locally. The one exception is deliberate and
-narrow: when a copied message references its image only by URL (no image bytes
-on the clipboard; common for Discord, Slack and web chat), that single image is
-downloaded once so the pin can show it — nothing is ever uploaded, the request
-carries no cookies, and remote images are only fetched when the pasted content
-actually needs them. Pin history is stored under
-`~/Library/Application Support/Pinboard/History/` and can be cleared or bounded
-by retention in the History window / Settings.
+narrow: when pasted content references its image only by URL (no image bytes on
+the clipboard; common for Discord, Slack and web chat) or when a Markdown pin
+contains `![alt](url)`, that single image is downloaded once so the pin can
+show it — nothing is ever uploaded, the request carries no cookies, and remote
+images are only fetched when the content actually needs them. Pin history is
+stored under `~/Library/Application Support/Pinboard/History/` and can be
+cleared or bounded by retention in the History window / Settings.

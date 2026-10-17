@@ -62,26 +62,6 @@ enum HTMLImages {
         options: [.caseInsensitive]
     )
 
-    /// The bytes behind a `data:` URI or `file:` URL. Remote sources return
-    /// nil; the caller fetches those asynchronously.
-    static func localData(from source: String) -> Data? {
-        if source.lowercased().hasPrefix("data:") { return dataURI(source) }
-        guard let url = URL(string: source), url.isFileURL else { return nil }
-        return try? Data(contentsOf: url)
-    }
-
-    /// `data:[<image/type>][;base64],<payload>`.
-    static func dataURI(_ source: String) -> Data? {
-        guard let comma = source.firstIndex(of: ",") else { return nil }
-        let metadata = source[source.index(source.startIndex, offsetBy: 5)..<comma].lowercased()
-        guard metadata.hasPrefix("image/") else { return nil }
-        let payload = String(source[source.index(after: comma)...])
-        if metadata.hasSuffix(";base64") {
-            return Data(base64Encoded: payload, options: [.ignoreUnknownCharacters])
-        }
-        return payload.removingPercentEncoding.map { Data($0.utf8) }
-    }
-
     /// `&amp;` is decoded last so an escaped entity is not decoded twice.
     private static func decodeEntities(_ string: String) -> String {
         guard string.contains("&") else { return string }

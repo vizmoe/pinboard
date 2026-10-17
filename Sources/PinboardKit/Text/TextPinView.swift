@@ -7,6 +7,12 @@ import AppKit
 final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     weak var pinController: PinWindowController?
 
+    /// Loads images referenced by the text — pasted HTML the importer left as
+    /// an empty attachment, and Markdown `![alt](url)`. `PinWindowManager`
+    /// injects its loader when the pin is created so tests never hit the
+    /// network, and the view re-resolves after every re-render.
+    var imageLoader: RemoteImageFetching = RemoteImageLoader.shared
+
     private let scrollView = NSScrollView()
     private let textView: PinTextView
     private(set) var isEditing = false
@@ -169,13 +175,15 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     /// What the text stack currently draws (or edits).
     private var displayAttributedString: NSAttributedString {
-        switch textMode {
-        case .richText, .plainText:
-            return attributedString
-        case .markdown:
-            return isEditing ? NSAttributedString(string: sourceText, attributes: Self.sourceAttributes)
-                             : MarkdownRenderer.render(sourceText)
+        if isEditing {
+            return textMode == .markdown
+                ? NSAttributedString(string: sourceText, attributes: Self.sourceAttributes)
+                : attributedString
         }
+        // Idle: the storage is exactly what is shown — for Markdown that is
+        // the rendered document, with any images already resolved. Rendering
+        // again here would measure placeholders the pin no longer shows.
+        return textView.textStorage.map { NSAttributedString(attributedString: $0) } ?? NSAttributedString()
     }
 
     // MARK: - Modes
@@ -205,6 +213,9 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         textMode = mode
         apply(canonical: next, mode: mode)
         if !isEditing { textView.setReadOnlyMode() }
+        // A Markdown document can carry images, and a switch into rich text
+        // keeps them; anything still unresolved is picked up here.
+        resolveDeferredImages()
         pinController?.refreshChrome()
     }
 
@@ -302,6 +313,8 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         if window?.firstResponder === textView { window?.makeFirstResponder(nil) }
         textView.needsDisplay = true
         syncWrapWidth()
+        // The edited source may reference images the display has not shown yet.
+        resolveDeferredImages()
         pinController?.refreshChrome()
     }
 
@@ -331,31 +344,40 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         formatToolbar?.show(attachedTo: window)
     }
 
-    // MARK: - HTML images
+    // MARK: - Deferred images
 
     /// An attachment that still shows a placeholder because its image has not
     /// been resolved yet.
     private struct DeferredImage {
         let source: String
+        let alt: String?
         let attachment: NSTextAttachment
     }
 
-    /// Fills in the images of attachments imported from pasted HTML.
+    /// Fills in the images the text references.
     ///
-    /// `ClipboardReader` tags every `<img>` with `htmlImageSourceAttribute`;
-    /// AppKit's importer never resolves the pixels itself. Local sources
-    /// (`data:`, `file:`) are read here, remote ones are fetched, and the
-    /// result is placed into the existing placeholder attachment.
-    func resolveDeferredImages(using loader: RemoteImageFetching = RemoteImageLoader.shared) {
+    /// `ClipboardReader` tags the attachments of pasted HTML (AppKit's
+    /// importer never resolves `<img>` content) and `MarkdownRenderer` tags
+    /// `![alt](url)`; both carry `DeferredImages.sourceAttribute`. Local
+    /// sources (`data:`, `file:`) are read here, remote ones are fetched, and
+    /// a source that cannot be loaded falls back to its alt text.
+    func resolveDeferredImages() {
         for image in deferredImages() {
-            if let data = HTMLImages.localData(from: image.source) {
+            if let data = DeferredImages.localData(from: image.source) {
                 install(data, for: image)
             } else if let url = URL(string: image.source),
                       url.scheme == "http" || url.scheme == "https" {
-                loader.fetch(url) { [weak self] data in
-                    guard let self, let data else { return }
-                    self.install(data, for: image)
+                imageLoader.fetch(url) { [weak self] data in
+                    guard let self else { return }
+                    if let data {
+                        self.install(data, for: image)
+                    } else {
+                        self.showAltText(for: image)
+                    }
                 }
+            } else {
+                // Relative or unsupported URL: nothing to load.
+                showAltText(for: image)
             }
         }
     }
@@ -363,19 +385,27 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     private func deferredImages() -> [DeferredImage] {
         guard let storage = textView.textStorage else { return [] }
         var images: [DeferredImage] = []
-        storage.enumerateAttribute(ClipboardReader.htmlImageSourceAttribute,
+        storage.enumerateAttribute(DeferredImages.sourceAttribute,
                                    in: storage.fullRange, options: []) { value, range, _ in
             guard let source = value as? String,
                   let attachment = storage.attribute(.attachment, at: range.location,
                                                      effectiveRange: nil) as? NSTextAttachment else { return }
-            images.append(DeferredImage(source: source, attachment: attachment))
+            images.append(DeferredImage(
+                source: source,
+                alt: storage.attribute(DeferredImages.altAttribute, at: range.location,
+                                       effectiveRange: nil) as? String,
+                attachment: attachment
+            ))
         }
         return images
     }
 
     private func install(_ data: Data, for image: DeferredImage) {
-        guard let nsImage = NSImage(data: data), nsImage.isValid,
-              let range = currentRange(of: image) else { return }
+        guard let nsImage = NSImage(data: data), nsImage.isValid else {
+            showAltText(for: image)
+            return
+        }
+        guard let range = currentRange(of: image) else { return }
 
         // The attachment may be painted any time after the read; setting the
         // image and fitting it to the current wrap width is all that is
@@ -383,7 +413,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         // image, so the placeholder bytes never travel with the pin.
         image.attachment.image = nsImage
         image.attachment.bounds = Self.imageBounds(for: nsImage, fitting: textWrapWidth)
-        textView.textStorage?.removeAttribute(ClipboardReader.htmlImageSourceAttribute, range: range)
+        textView.textStorage?.removeAttribute(DeferredImages.sourceAttribute, range: range)
 
         textView.layoutManager?.invalidateLayout(forCharacterRange: range,
                                                  actualCharacterRange: nil)
@@ -393,12 +423,31 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         pinController?.contentDidChange()
     }
 
+    /// The image could not be loaded: its alt text takes the placeholder's
+    /// place, so a broken, relative or closed-off URL still reads as
+    /// something. Producers without alt text (pasted HTML) keep their
+    /// placeholder instead.
+    private func showAltText(for image: DeferredImage) {
+        guard let alt = image.alt, !alt.isEmpty,
+              let range = currentRange(of: image),
+              let storage = textView.textStorage else { return }
+
+        var attributes = storage.attributes(at: range.location, effectiveRange: nil)
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: DeferredImages.sourceAttribute)
+        attributes.removeValue(forKey: DeferredImages.altAttribute)
+        storage.replaceCharacters(in: range, with: NSAttributedString(string: alt, attributes: attributes))
+
+        syncWrapWidth()
+        pinController?.contentDidChange()
+    }
+
     /// The attachment's current range — found by identity, because text typed
     /// while the image was loading may have shifted it.
     private func currentRange(of image: DeferredImage) -> NSRange? {
         guard let storage = textView.textStorage else { return nil }
         var found: NSRange?
-        storage.enumerateAttribute(ClipboardReader.htmlImageSourceAttribute,
+        storage.enumerateAttribute(DeferredImages.sourceAttribute,
                                    in: storage.fullRange, options: []) { value, range, stop in
             guard (value as? String) == image.source,
                   (storage.attribute(.attachment, at: range.location,

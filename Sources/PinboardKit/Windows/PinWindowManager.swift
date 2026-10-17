@@ -39,9 +39,13 @@ final class PinWindowManager {
         controller.setFrame(frame)
         pins.append(controller)
         controller.present()
-        // Images only referenced by pasted HTML are resolved once the window
-        // exists, so they can be sized against the real wrap width and grow it.
-        (controller.contentView as? TextPinView)?.resolveDeferredImages(using: remoteImageLoader)
+        // Images only referenced by the text (pasted HTML, Markdown source)
+        // are resolved once the window exists, so they can be sized against
+        // the real wrap width and grow it.
+        if let textView = controller.contentView as? TextPinView {
+            textView.imageLoader = remoteImageLoader
+            textView.resolveDeferredImages()
+        }
         registerInHistory(controller)
         notifyChange()
         return controller

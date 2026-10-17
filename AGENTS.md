@@ -48,15 +48,16 @@ library so it can be unit tested (`@testable import PinboardKit`).
   Delete, Clear; list keeps `updatedAt`-desc records)
 - `Clipboard` — pasteboard resolution (RTFD > RTF > image > HTML > plain),
   `HTMLImages` (parses `<img src>` out of pasted HTML), `RemoteImageLoader`
-  (fetches those images off the main thread)
+  (fetches remote images off the main thread; session cache)
 - `Windows` — `PinPanel`, `PinRootView`, `PinWindowController`,
   `PinWindowManager`, drag/resize event loops, hover chrome
 - `Text` — `TextPinView` / `PinTextView` (rich text / plain text / Markdown
   source editing), `TextFormatter` (attribute logic, unit tested),
   `TextFormatToolbar`, `TextDefaults` (PingFang SC 14, the app-wide default
-  typography)
+  typography), `DeferredImages` (attachment tags for images that load later)
 - `Markdown` — `MarkdownRenderer` (Foundation cmark `PresentationIntent` walk →
-  display-only attributed string, unit tested)
+  display-only attributed string, unit tested; `![alt](url)` becomes a
+  `DeferredImages` placeholder)
 - `Image` — `ImagePinView` plus `Image/Annotation` (model, store with undo,
   renderer, canvas, toolbar, Core Image effects)
 - `Settings` — SwiftUI preferences window
@@ -129,17 +130,34 @@ Window management never inspects content specifics: pin views conform to
   `FirstMouseButton`/`FirstMouseSlider` because pin panels are non-activating.
   A pin stays in edit mode while its own toolbar, the colour panel or the font
   panel holds key focus (see `handleResignKey`).
+- Markdown images: Foundation's parser exposes `![alt](url)` as a run whose
+  `imageURL` is set and whose characters are the alt text; the renderer emits a
+  tagged placeholder instead (`DeferredImages.sourceAttribute` /
+  `altAttribute`). Two limits worth knowing: a linked image
+  (`[![alt](img)](target)`) has no `imageURL` on the run — Foundation reports
+  only the link, so it keeps its alt text — and an image without alt text
+  carries the object-replacement character, which the renderer strips.
+- Images the text only references are resolved by
+  `TextPinView.resolveDeferredImages`, which runs after
+  `PinWindowManager.createPin` places the pin (so they are sized against the
+  real wrap width), after `setTextMode` and after `endEditing` (a re-render can
+  bring new ones). `data:`/`file:` read locally, `http(s)` go through
+  `RemoteImageLoader` (injected as `PinWindowManager.remoteImageLoader` so
+  tests never hit the network; successful downloads are cached for the
+  session, so re-rendering a Markdown pin does not refetch). A source that
+  cannot be loaded leaves the producer's alt text in place — pasted HTML has
+  none, so its placeholder simply stays empty. `TextPinView.imageLoader` is
+  the view-level knob; the manager overwrites it at creation.
 - AppKit's HTML importer never resolves `<img>` content — not `http(s):`, not
   `file:`, not even `data:` URIs; it leaves a placeholder attachment.
   `ClipboardReader` therefore tags each `<img>` with
-  `htmlImageSourceAttribute`, and `PinWindowManager.createPin` asks the view to
-  `resolveDeferredImages` once the window exists: `data:`/`file:` read locally,
-  `http(s)` go through `RemoteImageLoader` (injected as
-  `PinWindowManager.remoteImageLoader` so tests never hit the network; a
-  failed fetch simply leaves the placeholder). Installed images are fitted to
-  the wrap width and the window `growToFitContent()`, and RTFD serialization
-  encodes the attachment from the image, so copy-out and history carry the
-  real pixels.
+  `DeferredImages.sourceAttribute`, and `PinWindowManager.createPin` asks the
+  view to `resolveDeferredImages()` once the window exists. Installed images
+  are fitted to the wrap width and the window `growToFitContent()`, and RTFD
+  serialization encodes the attachment from the image, so copy-out and history
+  carry the real pixels. `TextPinView.displayAttributedString` measures the
+  live text storage while idle (a fresh Markdown render would measure empty
+  placeholders, so the window would never grow for an arriving picture).
 
 ## Verification notes
 
