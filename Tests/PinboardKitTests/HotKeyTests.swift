@@ -46,6 +46,44 @@ final class HotKeyTests: XCTestCase {
         XCTAssertTrue(HotKeyManager.shared.register(second),
                       "re-registering must drop the old binding instead of stacking")
         XCTAssertEqual(HotKeyManager.shared.current, second)
+        var probe: EventHotKeyRef?
+        let status = RegisterEventHotKey(first.keyCode, first.carbonModifiers,
+                                         EventHotKeyID(signature: 0x50425453, id: 3),
+                                         GetEventDispatcherTarget(), 0, &probe)
+        if let probe { UnregisterEventHotKey(probe) }
+        XCTAssertEqual(status, noErr, "successful replacement must release the old system binding")
+    }
+
+    func testConflictingReplacementKeepsTheOldSystemRegistration() throws {
+        let manager = HotKeyManager.shared
+        let modifiers = UInt32(cmdKey | optionKey | shiftKey | controlKey)
+        let first = HotKeyManager.Shortcut(keyCode: UInt32(kVK_F17), carbonModifiers: modifiers)
+        let conflict = HotKeyManager.Shortcut(keyCode: UInt32(kVK_F19), carbonModifiers: modifiers)
+        var blocker: EventHotKeyRef?
+        XCTAssertEqual(RegisterEventHotKey(conflict.keyCode, conflict.carbonModifiers,
+                                           EventHotKeyID(signature: 0x50425453, id: 1),
+                                           GetEventDispatcherTarget(), 0, &blocker), noErr)
+        let blockerRef = try XCTUnwrap(blocker)
+        defer { UnregisterEventHotKey(blockerRef) }
+        XCTAssertTrue(manager.register(first))
+
+        XCTAssertFalse(manager.register(conflict))
+        XCTAssertEqual(manager.current, first)
+        var probe: EventHotKeyRef?
+        let status = RegisterEventHotKey(first.keyCode, first.carbonModifiers,
+                                         EventHotKeyID(signature: 0x50425453, id: 2),
+                                         GetEventDispatcherTarget(), 0, &probe)
+        if let probe { UnregisterEventHotKey(probe) }
+        XCTAssertEqual(status, OSStatus(eventHotKeyExistsErr), "the original key must still be reserved by Pinboard")
+    }
+
+    func testRegisteringCurrentShortcutIsIdempotent() {
+        let manager = HotKeyManager.shared
+        let shortcut = HotKeyManager.Shortcut(keyCode: UInt32(kVK_F17),
+                                             carbonModifiers: UInt32(cmdKey | optionKey | shiftKey | controlKey))
+        XCTAssertTrue(manager.register(shortcut))
+        XCTAssertTrue(manager.register(shortcut))
+        XCTAssertEqual(manager.current, shortcut)
     }
 
     func testPreferencesRoundTrip() {

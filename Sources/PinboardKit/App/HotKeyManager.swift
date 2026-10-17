@@ -47,7 +47,7 @@ final class HotKeyManager {
     /// that as a failure, not a success.
     @discardableResult
     func register(_ shortcut: Shortcut) -> Bool {
-        unregister()
+        guard shortcut != current else { return true }
         installHandlerIfNeeded()
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(
@@ -59,6 +59,9 @@ final class HotKeyManager {
             &ref
         )
         guard status == noErr, let ref else { return false }
+        // Keep the existing binding live until its replacement is secured.
+        // Settings retains the old shortcut when registration fails.
+        unregister()
         hotKeyRef = ref
         current = shortcut
         return true
