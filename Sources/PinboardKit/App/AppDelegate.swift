@@ -12,9 +12,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         AppMenu.install()
-        manager.onHistoryWriteError = { error in
-            NSLog("Pinboard history save failed: %@", error.localizedDescription)
-            Toast.show("Couldn't save pin history", duration: 3)
+        manager.onHistoryError = { error in
+            NSLog("Pinboard history update failed: %@", error.localizedDescription)
+            Toast.show("Couldn't update pin history", duration: 3)
         }
         manager.historyStore = .shared
         manager.pruneHistoryIfDue(force: true)

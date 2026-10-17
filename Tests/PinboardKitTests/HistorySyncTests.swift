@@ -18,7 +18,7 @@ final class HistorySyncTests: XCTestCase {
     override func tearDown() {
         manager.closeAll()
         manager.historyStore = nil
-        manager.onHistoryWriteError = nil
+        manager.onHistoryError = nil
         try? FileManager.default.removeItem(at: directory)
         super.tearDown()
     }
@@ -38,7 +38,7 @@ final class HistorySyncTests: XCTestCase {
     func testFailedInitialSaveReportsErrorAndCanRetryForTheSamePin() throws {
         try Data("blocked".utf8).write(to: directory)
         var errors: [Error] = []
-        manager.onHistoryWriteError = { errors.append($0) }
+        manager.onHistoryError = { errors.append($0) }
 
         let pin = try makePin()
         let recordID = try XCTUnwrap(pin.historyRecordID)
@@ -261,5 +261,24 @@ final class HistorySyncTests: XCTestCase {
         XCTAssertEqual(store.records.map(\.id), [liveID])
         XCTAssertEqual(live.historyRecordID, liveID)
         XCTAssertTrue(live.isPinVisible)
+    }
+
+    func testFailedHistoryDeletionReportsErrorAndKeepsLiveAssociation() throws {
+        let pin = try makePin()
+        let id = try XCTUnwrap(pin.historyRecordID)
+        let path = directory.appendingPathComponent(id.uuidString).path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: path)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: path) }
+        var errors: [Error] = []
+        manager.onHistoryError = { errors.append($0) }
+        let model = HistoryViewModel(store: store, manager: manager)
+        model.selection = id
+
+        model.delete(id)
+
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertEqual(pin.historyRecordID, id)
+        XCTAssertEqual(model.selection, id)
+        XCTAssertNotNil(store.entry(id: id))
     }
 }

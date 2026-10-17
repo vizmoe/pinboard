@@ -50,14 +50,22 @@ final class HistoryViewModel: ObservableObject {
     }
 
     func delete(_ id: HistoryRecord.ID) {
-        store.delete(id: id)
-        manager.detachHistoryRecord(id)
-        if selection == id { selection = nil }
+        do {
+            try store.delete(id: id)
+            manager.detachHistoryRecord(id)
+            if selection == id { selection = nil }
+        } catch {
+            manager.onHistoryError?(error)
+        }
     }
 
     func clearAll() {
-        store.clear(excluding: manager.liveHistoryRecordIDs)
-        selection = nil
+        do {
+            try store.clear(excluding: manager.liveHistoryRecordIDs)
+        } catch {
+            manager.onHistoryError?(error)
+        }
+        if let selection, store.record(id: selection) == nil { self.selection = nil }
     }
 
     /// Full content for the detail pane.

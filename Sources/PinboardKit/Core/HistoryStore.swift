@@ -201,29 +201,40 @@ final class HistoryStore {
         }
     }
 
-    func delete(id: UUID) {
-        try? FileManager.default.removeItem(at: recordDirectory(id))
-        records.removeAll { $0.id == id }
-        onChange?()
+    func delete(id: UUID) throws {
+        try removeRecords { $0.id == id }
     }
 
-    func clear(excluding liveIDs: Set<UUID> = []) {
-        for record in records where !liveIDs.contains(record.id) {
-            try? FileManager.default.removeItem(at: recordDirectory(record.id))
-        }
-        records.removeAll { !liveIDs.contains($0.id) }
-        onChange?()
+    func clear(excluding liveIDs: Set<UUID> = []) throws {
+        try removeRecords { !liveIDs.contains($0.id) }
     }
 
     /// Drops records untouched since `cutoff`. Records still attached to an
     /// open pin are always kept.
-    func prune(olderThan cutoff: Date, excluding liveIDs: Set<UUID> = []) {
-        for record in records where record.updatedAt < cutoff && !liveIDs.contains(record.id) {
-            try? FileManager.default.removeItem(at: recordDirectory(record.id))
+    func prune(olderThan cutoff: Date, excluding liveIDs: Set<UUID> = []) throws {
+        try removeRecords { $0.updatedAt < cutoff && !liveIDs.contains($0.id) }
+    }
+
+    /// Publish only successful removals. A batch may partially succeed; failed
+    /// records stay visible and the first error is reported after the batch.
+    private func removeRecords(where shouldRemove: (HistoryRecord) -> Bool) throws {
+        var removed: Set<UUID> = []
+        var firstError: Error?
+        for record in records where shouldRemove(record) {
+            do {
+                try FileManager.default.removeItem(at: recordDirectory(record.id))
+                removed.insert(record.id)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                removed.insert(record.id)
+            } catch {
+                if firstError == nil { firstError = error }
+            }
         }
-        let before = records.count
-        records.removeAll { $0.updatedAt < cutoff && !liveIDs.contains($0.id) }
-        if records.count != before { onChange?() }
+        if !removed.isEmpty {
+            records.removeAll { removed.contains($0.id) }
+            onChange?()
+        }
+        if let firstError { throw firstError }
     }
 
     private func recordDirectory(_ id: UUID) -> URL {

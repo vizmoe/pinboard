@@ -10,7 +10,7 @@ final class PinWindowManager {
 
     /// nil disables history (tests opt in with a temp-directory store).
     var historyStore: HistoryStore?
-    var onHistoryWriteError: ((Error) -> Void)?
+    var onHistoryError: ((Error) -> Void)?
     /// Debounce for edit → history writes. Tests can shrink it to ~0 and call
     /// `flushHistorySync()` for a synchronous write.
     var historyWriteDelay: TimeInterval = 2.0
@@ -160,7 +160,7 @@ final class PinWindowManager {
             try store.upsert(id: id, content: state.content, annotationData: state.annotationData)
         } catch {
             dirtyHistoryRecords.insert(id)
-            onHistoryWriteError?(error)
+            onHistoryError?(error)
         }
     }
 
@@ -177,7 +177,11 @@ final class PinWindowManager {
         guard force || Date().timeIntervalSince(lastHistoryPrune) > 3600 else { return }
         lastHistoryPrune = Date()
         if let cutoff = Preferences.shared.historyRetentionCutoff {
-            store.prune(olderThan: cutoff, excluding: liveHistoryRecordIDs)
+            do {
+                try store.prune(olderThan: cutoff, excluding: liveHistoryRecordIDs)
+            } catch {
+                onHistoryError?(error)
+            }
         }
     }
 

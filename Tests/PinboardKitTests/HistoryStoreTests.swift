@@ -148,15 +148,62 @@ final class HistoryStoreTests: XCTestCase {
     func testDeleteRemovesFiles() throws {
         let id = try store.upsert(content: .text(makeText()))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(id.uuidString).path))
-        store.delete(id: id)
+        try store.delete(id: id)
         XCTAssertTrue(store.records.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(id.uuidString).path))
+    }
+
+    func testDeleteFailureKeepsRecordAndPayload() throws {
+        let id = try store.upsert(content: .text(makeText("keep me")))
+        let path = directory.appendingPathComponent(id.uuidString).path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: path)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: path) }
+        var changes = 0
+        store.onChange = { changes += 1 }
+
+        XCTAssertThrowsError(try store.delete(id: id))
+
+        XCTAssertNotNil(store.record(id: id))
+        XCTAssertNotNil(store.entry(id: id))
+        XCTAssertNotNil(HistoryStore(directory: directory).entry(id: id))
+        XCTAssertEqual(changes, 0)
+    }
+
+    func testClearReportsPartialFailureAndKeepsUndeletableRecords() throws {
+        let locked = try store.upsert(content: .text(makeText("locked")))
+        let removable = try store.upsert(content: .text(makeText("removable")))
+        let path = directory.appendingPathComponent(locked.uuidString).path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: path)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: path) }
+
+        XCTAssertThrowsError(try store.clear())
+
+        XCTAssertEqual(store.records.map(\.id), [locked])
+        XCTAssertNil(store.record(id: removable))
+        XCTAssertEqual(HistoryStore(directory: directory).records.map(\.id), [locked])
+    }
+
+    func testPruneReportsFailureWithoutForgettingUndeletableRecord() throws {
+        let id = try store.upsert(content: .text(makeText("locked")))
+        let path = directory.appendingPathComponent(id.uuidString).path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: path)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: path) }
+
+        XCTAssertThrowsError(try store.prune(olderThan: Date().addingTimeInterval(60)))
+        XCTAssertNotNil(store.record(id: id))
+    }
+
+    func testDeletingAlreadyMissingPayloadRemovesItsMetadata() throws {
+        let id = try store.upsert(content: .text(makeText()))
+        try FileManager.default.removeItem(at: directory.appendingPathComponent(id.uuidString))
+        try store.delete(id: id)
+        XCTAssertNil(store.record(id: id))
     }
 
     func testPruneRespectsCutoffAndLiveIDs() throws {
         let old = try store.upsert(content: .text(makeText("old")))
         let live = try store.upsert(content: .text(makeText("live")))
-        store.prune(olderThan: Date().addingTimeInterval(60), excluding: [live])
+        try store.prune(olderThan: Date().addingTimeInterval(60), excluding: [live])
 
         XCTAssertNil(store.record(id: old))
         XCTAssertNotNil(store.record(id: live), "a record attached to an open pin is never pruned")
