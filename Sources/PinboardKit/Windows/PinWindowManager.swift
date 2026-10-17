@@ -15,6 +15,7 @@ final class PinWindowManager {
     /// `flushHistorySync()` for a synchronous write.
     var historyWriteDelay: TimeInterval = 2.0
     private var pendingHistoryWrites: [UUID: DispatchWorkItem] = [:]
+    private var dirtyHistoryRecords: Set<UUID> = []
     private var lastHistoryPrune: Date = .distantPast
 
     private var cascadeStep = 0
@@ -50,7 +51,9 @@ final class PinWindowManager {
 
     func remove(_ controller: PinWindowController) {
         flushHistorySync(for: controller)
+        if let id = controller.historyRecordID { dirtyHistoryRecords.remove(id) }
         pins.removeAll { $0 === controller }
+        controller.manager = nil
         notifyChange()
     }
 
@@ -102,7 +105,9 @@ final class PinWindowManager {
         guard historyStore != nil else { return }
         // Reserve the identity even if the first save fails, so a later edit
         // or close can retry without abandoning this pin's history.
-        controller.historyRecordID = UUID()
+        let id = UUID()
+        controller.historyRecordID = id
+        dirtyHistoryRecords.insert(id)
         writeHistory(for: controller)
         pruneHistoryIfDue()
     }
@@ -110,6 +115,7 @@ final class PinWindowManager {
     /// Debounced entry point called by pin views whenever content mutates.
     func pinContentDidChange(_ controller: PinWindowController) {
         guard let id = controller.historyRecordID, historyStore != nil else { return }
+        dirtyHistoryRecords.insert(id)
         pendingHistoryWrites[id]?.cancel()
         let item = DispatchWorkItem { [weak self, weak controller] in
             guard let self, let controller else { return }
@@ -129,15 +135,21 @@ final class PinWindowManager {
 
     /// Flushes every pending write (app quit).
     func flushAllHistorySyncs() {
-        for controller in pins { flushHistorySync(for: controller) }
+        for controller in pins {
+            // Text annotation fields hold a draft until editing ends.
+            controller.endEditing()
+            flushHistorySync(for: controller)
+        }
     }
 
     private func writeHistory(for controller: PinWindowController) {
-        guard let id = controller.historyRecordID, let store = historyStore else { return }
+        guard let id = controller.historyRecordID, let store = historyStore,
+              dirtyHistoryRecords.remove(id) != nil else { return }
         let state = controller.contentView.captureState()
         do {
             try store.upsert(id: id, content: state.content, annotationData: state.annotationData)
         } catch {
+            dirtyHistoryRecords.insert(id)
             onHistoryWriteError?(error)
         }
     }

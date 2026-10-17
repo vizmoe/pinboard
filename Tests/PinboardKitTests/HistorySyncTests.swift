@@ -89,6 +89,80 @@ final class HistorySyncTests: XCTestCase {
         XCTAssertNotNil(store.record(id: recordID), "closing a pin keeps the history entry")
     }
 
+    func testFlushingAndClosingUnchangedPinDoesNotRewriteHistory() throws {
+        let pin = try makePin()
+        let id = try XCTUnwrap(pin.historyRecordID)
+        let saved = try XCTUnwrap(store.record(id: id))
+        var writes = 0
+        store.onChange = { writes += 1 }
+
+        manager.flushAllHistorySyncs()
+        manager.flushHistorySync(for: pin)
+        pin.closePin()
+
+        XCTAssertEqual(writes, 0)
+        XCTAssertEqual(store.record(id: id), saved, "closing must not refresh retention or reorder history")
+    }
+
+    func testRepeatedEditsFlushOnceAndClosingDoesNotRepeatTheSave() throws {
+        let pin = try makePin()
+        let view = try XCTUnwrap(pin.contentView as? TextPinView)
+        var writes = 0
+        store.onChange = { writes += 1 }
+        view.beginEditing(at: nil)
+        for text in ["first", "latest"] {
+            view.editableTextView.insertText(text, replacementRange: NSRange(location: 0, length: view.editableTextView.string.utf16.count))
+        }
+        manager.flushHistorySync(for: pin)
+        manager.flushHistorySync(for: pin)
+        pin.closePin()
+
+        XCTAssertEqual(writes, 1)
+        XCTAssertEqual(store.record(id: try XCTUnwrap(pin.historyRecordID))?.text, "latest")
+    }
+
+    func testDebouncedSaveIsNotRepeatedByFlush() throws {
+        let previousDelay = manager.historyWriteDelay
+        manager.historyWriteDelay = 0.01
+        defer { manager.historyWriteDelay = previousDelay }
+        let pin = try makePin()
+        let saved = expectation(description: "debounced history write")
+        var writes = 0
+        store.onChange = {
+            writes += 1
+            if writes == 1 { saved.fulfill() }
+        }
+        let view = try XCTUnwrap(pin.contentView as? TextPinView)
+        view.beginEditing(at: nil)
+        view.editableTextView.insertText("saved", replacementRange: NSRange(location: 0, length: 8))
+        wait(for: [saved], timeout: 2)
+
+        manager.flushAllHistorySyncs()
+        XCTAssertEqual(writes, 1)
+        XCTAssertEqual(store.record(id: try XCTUnwrap(pin.historyRecordID))?.text, "saved")
+    }
+
+    func testQuitFlushCommitsActiveAnnotationTextEditor() throws {
+        let pin = manager.createPin(content: .image(TestImage.make(width: 200, height: 100)))
+        let view = try XCTUnwrap(pin.contentView as? ImagePinView)
+        view.beginAnnotating()
+        let canvas = try XCTUnwrap(view.subviews.compactMap { $0 as? AnnotationCanvasView }.first)
+        canvas.tool = .text
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 30, y: 40),
+                                                     modifierFlags: [], timestamp: 0, windowNumber: pin.panel.windowNumber,
+                                                     context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        canvas.mouseDown(with: event)
+        let editor = try XCTUnwrap(canvas.subviews.compactMap { $0 as? NSTextField }.first)
+        editor.stringValue = "last edit before quit"
+
+        manager.flushAllHistorySyncs()
+
+        let entry = try XCTUnwrap(store.entry(id: try XCTUnwrap(pin.historyRecordID)))
+        let data = try XCTUnwrap(entry.annotationData)
+        let restored = try JSONDecoder().decode(AnnotationStore.Payload.self, from: data)
+        XCTAssertEqual(restored.annotations.map(\.text), ["last edit before quit"])
+    }
+
     func testRepinCreatesIndependentWindowAndRecord() throws {
         let pin = try makePin()
         let recordID = try XCTUnwrap(pin.historyRecordID)
