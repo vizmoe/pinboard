@@ -83,6 +83,27 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         panel.invalidateShadow()
     }
 
+    /// Grows the window so content that arrived after creation (an image
+    /// fetched for a pasted HTML message) is visible. Only ever grows, keeps
+    /// the top-left corner anchored and stays inside the screen, mirroring
+    /// `idealFrame`.
+    func growToFitContent() {
+        guard !rootView.isEditingContent else { return }
+        let visible = (panel.screen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let maxSize = CGSize(width: visible.width * 0.8, height: visible.height * 0.8)
+        let ideal = contentView.idealSize(fitting: maxSize)
+        let frame = panel.frame
+        let size = CGSize(width: max(frame.width, ideal.width), height: max(frame.height, ideal.height))
+        guard size.width > frame.width + 1 || size.height > frame.height + 1 else { return }
+
+        var grown = NSRect(x: frame.origin.x, y: frame.maxY - size.height,
+                           width: size.width, height: size.height)
+        grown.origin.x = min(max(grown.origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+        grown.origin.y = min(max(grown.origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        setFrame(grown)
+    }
+
     func beginResize(edge: ResizeEdge) {
         WindowInteraction.resize(
             window: panel,

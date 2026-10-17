@@ -331,6 +331,95 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         formatToolbar?.show(attachedTo: window)
     }
 
+    // MARK: - HTML images
+
+    /// An attachment that still shows a placeholder because its image has not
+    /// been resolved yet.
+    private struct DeferredImage {
+        let source: String
+        let attachment: NSTextAttachment
+    }
+
+    /// Fills in the images of attachments imported from pasted HTML.
+    ///
+    /// `ClipboardReader` tags every `<img>` with `htmlImageSourceAttribute`;
+    /// AppKit's importer never resolves the pixels itself. Local sources
+    /// (`data:`, `file:`) are read here, remote ones are fetched, and the
+    /// result is placed into the existing placeholder attachment.
+    func resolveDeferredImages(using loader: RemoteImageFetching = RemoteImageLoader.shared) {
+        for image in deferredImages() {
+            if let data = HTMLImages.localData(from: image.source) {
+                install(data, for: image)
+            } else if let url = URL(string: image.source),
+                      url.scheme == "http" || url.scheme == "https" {
+                loader.fetch(url) { [weak self] data in
+                    guard let self, let data else { return }
+                    self.install(data, for: image)
+                }
+            }
+        }
+    }
+
+    private func deferredImages() -> [DeferredImage] {
+        guard let storage = textView.textStorage else { return [] }
+        var images: [DeferredImage] = []
+        storage.enumerateAttribute(ClipboardReader.htmlImageSourceAttribute,
+                                   in: storage.fullRange, options: []) { value, range, _ in
+            guard let source = value as? String,
+                  let attachment = storage.attribute(.attachment, at: range.location,
+                                                     effectiveRange: nil) as? NSTextAttachment else { return }
+            images.append(DeferredImage(source: source, attachment: attachment))
+        }
+        return images
+    }
+
+    private func install(_ data: Data, for image: DeferredImage) {
+        guard let nsImage = NSImage(data: data), nsImage.isValid,
+              let range = currentRange(of: image) else { return }
+
+        // The attachment may be painted any time after the read; setting the
+        // image and fitting it to the current wrap width is all that is
+        // needed — RTFD (copy-out and history) encodes the attachment from the
+        // image, so the placeholder bytes never travel with the pin.
+        image.attachment.image = nsImage
+        image.attachment.bounds = Self.imageBounds(for: nsImage, fitting: textWrapWidth)
+        textView.textStorage?.removeAttribute(ClipboardReader.htmlImageSourceAttribute, range: range)
+
+        textView.layoutManager?.invalidateLayout(forCharacterRange: range,
+                                                 actualCharacterRange: nil)
+        textView.layoutManager?.invalidateDisplay(forCharacterRange: range)
+        syncWrapWidth()
+        pinController?.growToFitContent()
+        pinController?.contentDidChange()
+    }
+
+    /// The attachment's current range — found by identity, because text typed
+    /// while the image was loading may have shifted it.
+    private func currentRange(of image: DeferredImage) -> NSRange? {
+        guard let storage = textView.textStorage else { return nil }
+        var found: NSRange?
+        storage.enumerateAttribute(ClipboardReader.htmlImageSourceAttribute,
+                                   in: storage.fullRange, options: []) { value, range, stop in
+            guard (value as? String) == image.source,
+                  (storage.attribute(.attachment, at: range.location,
+                                     effectiveRange: nil) as? NSTextAttachment) === image.attachment else { return }
+            found = range
+            stop.pointee = true
+        }
+        return found
+    }
+
+    /// Scales the image to the current wrap width; small images keep their
+    /// natural size.
+    private static func imageBounds(for image: NSImage, fitting width: CGFloat) -> NSRect {
+        let size = image.size
+        guard size.width > 1, size.height > 1 else { return .zero }
+        let scale = width > 1 ? min(1, width / size.width) : 1
+        return NSRect(x: 0, y: 0,
+                      width: (size.width * scale).rounded(.down),
+                      height: (size.height * scale).rounded(.down))
+    }
+
     // MARK: - NSTextViewDelegate
 
     func textViewDidChangeSelection(_ notification: Notification) {

@@ -46,7 +46,9 @@ library so it can be unit tested (`@testable import PinboardKit`).
   `TextContentMode`
 - `History` — `HistoryView`/`HistoryWindowController` (search, Pin Again, Copy,
   Delete, Clear; list keeps `updatedAt`-desc records)
-- `Clipboard` — pasteboard resolution (RTFD > RTF > image > HTML > plain)
+- `Clipboard` — pasteboard resolution (RTFD > RTF > image > HTML > plain),
+  `HTMLImages` (parses `<img src>` out of pasted HTML), `RemoteImageLoader`
+  (fetches those images off the main thread)
 - `Windows` — `PinPanel`, `PinRootView`, `PinWindowController`,
   `PinWindowManager`, drag/resize event loops, hover chrome
 - `Text` — `TextPinView` / `PinTextView` (rich text / plain text / Markdown
@@ -127,6 +129,17 @@ Window management never inspects content specifics: pin views conform to
   `FirstMouseButton`/`FirstMouseSlider` because pin panels are non-activating.
   A pin stays in edit mode while its own toolbar, the colour panel or the font
   panel holds key focus (see `handleResignKey`).
+- AppKit's HTML importer never resolves `<img>` content — not `http(s):`, not
+  `file:`, not even `data:` URIs; it leaves a placeholder attachment.
+  `ClipboardReader` therefore tags each `<img>` with
+  `htmlImageSourceAttribute`, and `PinWindowManager.createPin` asks the view to
+  `resolveDeferredImages` once the window exists: `data:`/`file:` read locally,
+  `http(s)` go through `RemoteImageLoader` (injected as
+  `PinWindowManager.remoteImageLoader` so tests never hit the network; a
+  failed fetch simply leaves the placeholder). Installed images are fitted to
+  the wrap width and the window `growToFitContent()`, and RTFD serialization
+  encodes the attachment from the image, so copy-out and history carry the
+  real pixels.
 
 ## Verification notes
 

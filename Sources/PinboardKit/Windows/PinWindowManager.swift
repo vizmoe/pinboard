@@ -11,6 +11,9 @@ final class PinWindowManager {
     /// nil disables history (tests opt in with a temp-directory store).
     var historyStore: HistoryStore?
     var onHistoryError: ((Error) -> Void)?
+    /// Loads images referenced by pasted HTML. Tests inject a stub so they
+    /// never touch the network.
+    var remoteImageLoader: RemoteImageFetching = RemoteImageLoader.shared
     /// Debounce for edit → history writes. Tests can shrink it to ~0 and call
     /// `flushHistorySync()` for a synchronous write.
     var historyWriteDelay: TimeInterval = 2.0
@@ -36,6 +39,9 @@ final class PinWindowManager {
         controller.setFrame(frame)
         pins.append(controller)
         controller.present()
+        // Images only referenced by pasted HTML are resolved once the window
+        // exists, so they can be sized against the real wrap width and grow it.
+        (controller.contentView as? TextPinView)?.resolveDeferredImages(using: remoteImageLoader)
         registerInHistory(controller)
         notifyChange()
         return controller

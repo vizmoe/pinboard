@@ -38,6 +38,11 @@ enum ClipboardReader {
         return nil
     }
 
+    /// Set on the object-replacement range of an `<img>` whose pixels still
+    /// have to be resolved; the value is the raw `src`. `TextPinView` reads it
+    /// once the pin exists, because remote images need an asynchronous fetch.
+    static let htmlImageSourceAttribute = NSAttributedString.Key("Pinboard.HTMLImageSource")
+
     private static func readHTML(from pasteboard: NSPasteboard) -> NSAttributedString? {
         guard let data = pasteboard.data(forType: .html),
               let rich = try? NSAttributedString(
@@ -51,9 +56,43 @@ enum ClipboardReader {
         // `white-space: pre-wrap`, which the importer ignores). The plain-text
         // flavour on the same pasteboard still carries the true structure, so
         // when both describe the same words, transplant its whitespace back.
-        guard let plain = pasteboard.string(forType: .string),
-              let restored = restoreWhitespace(of: plain, into: rich) else { return rich }
-        return restored
+        let text: NSAttributedString
+        if let plain = pasteboard.string(forType: .string),
+           let restored = restoreWhitespace(of: plain, into: rich) {
+            text = restored
+        } else {
+            text = rich
+        }
+        return taggingHTMLImages(in: text, html: data)
+    }
+
+    /// Tags the attachment of every `<img>` with its source, in document
+    /// order, and drops the placeholder character of images the page never
+    /// shows. The importer creates exactly one attachment per image and never
+    /// resolves its content, so the tag is what lets a pin fill the image in.
+    private static func taggingHTMLImages(in text: NSAttributedString, html: Data) -> NSAttributedString {
+        let sources = HTMLImages.sources(in: html)
+        guard !sources.isEmpty else { return text }
+
+        let result = NSMutableAttributedString(attributedString: text)
+        var attachmentRanges: [NSRange] = []
+        result.enumerateAttribute(.attachment, in: result.fullRange, options: []) { value, range, _ in
+            if value is NSTextAttachment { attachmentRanges.append(range) }
+        }
+        // Positional mapping is only trustworthy while both sides agree; a
+        // mismatch would attach the wrong picture somewhere.
+        guard attachmentRanges.count == sources.count else { return text }
+
+        for (index, range) in attachmentRanges.enumerated().reversed() {
+            guard let source = sources[index], !source.isEmpty else {
+                // The importer still reserves a character for a hidden image
+                // and renders its bytes; the page itself shows nothing.
+                result.deleteCharacters(in: range)
+                continue
+            }
+            result.addAttribute(htmlImageSourceAttribute, value: source, range: range)
+        }
+        return result
     }
 
     /// Rebuilds `rich` using the whitespace runs of `plain`, keeping every

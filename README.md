@@ -21,6 +21,10 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
   window from following the global default.
 - **Image annotation** — rectangle, ellipse, arrow, line, freehand, text,
   highlight, blur, mosaic and crop, all non-destructive and undoable.
+- **Charts in pasted messages** — when a copied message ships its image only
+  as an `<img>` reference (typical for Discord, Slack and web chat), the
+  picture is fetched and shown inside the pin instead of an empty
+  placeholder.
 - **Pin history** — every pin is recorded locally (latest edited state,
   including editable annotation data), searchable, re-pinnable, with
   configurable retention (default 30 days).
@@ -82,6 +86,11 @@ If `xcode-select` points at CommandLineTools, prefix SwiftPM commands with
 
 ## Data & Privacy
 
-All clipboard processing happens locally — nothing is uploaded. Pin history
-is stored under `~/Library/Application Support/Pinboard/History/` and can be
-cleared or bounded by retention in the History window / Settings.
+All clipboard processing happens locally. The one exception is deliberate and
+narrow: when a copied message references its image only by URL (no image bytes
+on the clipboard; common for Discord, Slack and web chat), that single image is
+downloaded once so the pin can show it — nothing is ever uploaded, the request
+carries no cookies, and remote images are only fetched when the pasted content
+actually needs them. Pin history is stored under
+`~/Library/Application Support/Pinboard/History/` and can be cleared or bounded
+by retention in the History window / Settings.
