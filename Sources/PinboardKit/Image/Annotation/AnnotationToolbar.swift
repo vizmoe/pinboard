@@ -119,6 +119,7 @@ final class AnnotationToolbar: AttachedToolbar {
         let selectedText = canvas.selectedAnnotation?.tool == .text ? canvas.selectedAnnotation : nil
         let effectiveStyle = canvas.selectedAnnotation?.style ?? canvas.style
         colorSwatch.setColorSilently(effectiveStyle.color)
+        widthSlider.doubleValue = Double(effectiveStyle.lineWidth)
 
         fontControls.isHidden = canvas.tool != .text && selectedText == nil
         let family = effectiveStyle.fontName ?? NSFont.systemFont(ofSize: 1).familyName ?? "Helvetica"
@@ -137,8 +138,10 @@ final class AnnotationToolbar: AttachedToolbar {
     }
 
     @objc private func widthChanged() {
-        Preferences.shared.annotationLineWidth = widthSlider.doubleValue
-        canvas?.updateSelectedStyle { $0.lineWidth = CGFloat(widthSlider.doubleValue) }
+        guard let canvas else { return }
+        let width = widthSlider.doubleValue
+        if canvas.selectedAnnotation == nil { Preferences.shared.annotationLineWidth = width }
+        canvas.updateSelectedStyle { $0.lineWidth = CGFloat(width) }
     }
 
     @objc private func fontFamilyChanged() {
