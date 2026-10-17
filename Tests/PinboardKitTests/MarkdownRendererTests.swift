@@ -37,8 +37,16 @@ final class MarkdownRendererTests: XCTestCase {
         font?.fontDescriptor.symbolicTraits.contains(.bold) ?? false
     }
 
-    private func isItalic(_ font: NSFont?) -> Bool {
-        font?.fontDescriptor.symbolicTraits.contains(.italic) ?? false
+    /// Italic either as a real face trait or as AppKit's synthetic
+    /// obliqueness, which the renderer uses when the family has no italic face
+    /// (PingFang SC).
+    private func isItalic(_ text: NSAttributedString, at needle: String) -> Bool {
+        guard let location = index(of: needle, in: text) else { return false }
+        if let font = text.attribute(.font, at: location, effectiveRange: nil) as? NSFont,
+           font.fontDescriptor.symbolicTraits.contains(.italic) {
+            return true
+        }
+        return (text.attribute(.obliqueness, at: location, effectiveRange: nil) as? CGFloat ?? 0) > 0
     }
 
     // MARK: - Blocks
@@ -111,8 +119,8 @@ final class MarkdownRendererTests: XCTestCase {
     func testInlineEmphasisCodeAndStrikethrough() {
         let output = render("plain **bold** *italic* ***both*** `code` ~~gone~~")
         XCTAssertTrue(isBold(font(output, at: "bold")))
-        XCTAssertTrue(isItalic(font(output, at: "italic")))
-        XCTAssertTrue(isBold(font(output, at: "both")) && isItalic(font(output, at: "both")))
+        XCTAssertTrue(isItalic(output, at: "italic"))
+        XCTAssertTrue(isBold(font(output, at: "both")) && isItalic(output, at: "both"))
         XCTAssertFalse(isBold(font(output, at: "plain")))
         XCTAssertEqual(font(output, at: "code")?.isFixedPitch, true)
         let strikethrough = index(of: "gone", in: output)!

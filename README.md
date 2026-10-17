@@ -3,9 +3,9 @@
 A lightweight macOS menu-bar utility that turns clipboard content — plain
 text, rich text (RTF/RTFD), or images — into independent floating windows
 that stay on top of ordinary apps. Text pins are directly editable with full
-RTF fidelity or as Markdown source with rendered display; image pins support
-non-destructive annotation and crop. Built entirely with native Swift/AppKit —
-no Electron, no WebView.
+RTF fidelity, as plain text in the default font, or as Markdown source with
+rendered display; image pins support non-destructive annotation and crop.
+Built entirely with native Swift/AppKit — no Electron, no WebView.
 
 ## Features
 
@@ -13,10 +13,12 @@ no Electron, no WebView.
   borderless always-on-top window. Multiple pins coexist independently.
 - **Editable rich text** — click to type, select, undo/redo; fonts, colors,
   backgrounds and paragraph styles survive import, editing and copy-out.
-- **Markdown pins** — idles as a rendered document (headings, lists, tables,
-  code, links), click to edit the raw source. Switch globally under
-  **Settings → Text**, or per pin via the window's context menu; a per-pin
-  switch stops that window from following the global default.
+- **Three text modes** — Rich Text keeps everything above; Plain Text drops
+  formatting and shows the text in the default font (PingFang SC 14);
+  Markdown idles as a rendered document (headings, lists, tables, code,
+  links) and edits as raw source. Switch globally under **Settings → Text**,
+  or per pin via the window's context menu; a per-pin switch stops that
+  window from following the global default.
 - **Image annotation** — rectangle, ellipse, arrow, line, freehand, text,
   highlight, blur, mosaic and crop, all non-destructive and undoable.
 - **Pin history** — every pin is recorded locally (latest edited state,

@@ -18,8 +18,9 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     /// pins the mode so later global changes leave this pin alone.
     private(set) var hasExplicitTextMode: Bool
 
-    /// Raw Markdown source; the canonical content of a Markdown pin.
-    private var markdownSource: String
+    /// Raw source for the non-rich modes. A Markdown pin renders it for
+    /// display; a Plain Text pin shows it as-is. Rich pins never use it.
+    private var sourceText: String
     /// The representation this pin had before the last mode switch. Kept until
     /// the next content edit, so a switch made by accident — or by the global
     /// default — can be flipped back without losing formatting.
@@ -32,7 +33,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     /// Monospaced while the raw Markdown source is being edited, so the source
     /// reads as code rather than as the rendered document.
-    static let sourceFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize - 1, weight: .regular)
+    static let sourceFont = TextDefaults.monospacedFont
 
     private static var sourceAttributes: [NSAttributedString.Key: Any] {
         [.font: sourceFont, .foregroundColor: NSColor.labelColor]
@@ -41,7 +42,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     init(attributedString: NSAttributedString, mode: TextContentMode = .richText, hasExplicitMode: Bool = false) {
         textMode = mode
         hasExplicitTextMode = hasExplicitMode
-        markdownSource = attributedString.string
+        sourceText = attributedString.string
         // Explicit TextKit 1 stack: TextKit 2 lays out through the display
         // cycle, which is skipped while the run loop sits in event-tracking
         // mode — exactly when a live window resize needs to re-wrap.
@@ -147,44 +148,45 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         !textView.drawsBackground && !scrollView.drawsBackground && !scrollView.contentView.drawsBackground
     }
 
-    /// The pin's canonical content: the live rich text, or the raw Markdown
-    /// source. Never the rendered document.
+    /// The pin's canonical content: the live rich text, or the raw source for
+    /// Plain Text and Markdown pins. Never a rendered document.
     var attributedString: NSAttributedString {
         switch textMode {
         case .richText:
             return textView.textStorage.map { NSAttributedString(attributedString: $0) } ?? NSAttributedString()
-        case .markdown:
-            return NSAttributedString(string: isEditing ? textView.string : markdownSource,
+        case .plainText, .markdown:
+            let source = isEditing ? textView.string : sourceText
+            return NSAttributedString(string: source,
                                       attributes: ClipboardReader.defaultTextAttributes())
         }
     }
 
-    /// The rendered Markdown document, regardless of editing state. In rich
-    /// mode this is simply the rich text.
+    /// The rendered Markdown document, regardless of editing state. In the
+    /// other modes this is simply the canonical text.
     var renderedAttributedString: NSAttributedString {
-        textMode == .markdown ? MarkdownRenderer.render(markdownSource) : attributedString
+        textMode == .markdown ? MarkdownRenderer.render(sourceText) : attributedString
     }
 
     /// What the text stack currently draws (or edits).
     private var displayAttributedString: NSAttributedString {
         switch textMode {
-        case .richText:
+        case .richText, .plainText:
             return attributedString
         case .markdown:
-            return isEditing ? NSAttributedString(string: markdownSource, attributes: Self.sourceAttributes)
-                             : MarkdownRenderer.render(markdownSource)
+            return isEditing ? NSAttributedString(string: sourceText, attributes: Self.sourceAttributes)
+                             : MarkdownRenderer.render(sourceText)
         }
     }
 
     // MARK: - Modes
 
-    /// Switches between rich text and Markdown. `explicit` marks a user choice,
-    /// which makes the pin stop following the global default.
+    /// Switches between rich text, plain text and Markdown. `explicit` marks a
+    /// user choice, which makes the pin stop following the global default.
     ///
-    /// Conversions are symmetrical: rich text becomes its plain string as
-    /// Markdown source, and Markdown becomes the rendered document as rich
-    /// text. The pre-switch representation is remembered until the next edit,
-    /// so an immediate switch back restores it exactly.
+    /// Conversions are symmetrical: the characters always survive, formatting
+    /// is kept only when the target is rich text, and Markdown renders into
+    /// rich text. The pre-switch representation is remembered until the next
+    /// edit, so an immediate switch back restores it exactly.
     func setTextMode(_ mode: TextContentMode, explicit: Bool) {
         if explicit { hasExplicitTextMode = true }
         guard mode != textMode else { return }
@@ -198,14 +200,31 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
             modeBackup = nil
         } else {
             modeBackup = (previousMode, previous)
-            next = mode == .richText
-                ? MarkdownRenderer.render(previous.string)
-                : NSAttributedString(string: previous.string, attributes: ClipboardReader.defaultTextAttributes())
+            next = Self.convert(previous, from: previousMode, to: mode)
         }
         textMode = mode
         apply(canonical: next, mode: mode)
         if !isEditing { textView.setReadOnlyMode() }
         pinController?.refreshChrome()
+    }
+
+    /// Canonical representation of `content` after switching from `oldMode` to
+    /// `newMode`. Only a rich target converts: Markdown renders into real rich
+    /// text; everything else carries the characters and lets the target mode
+    /// decide how to display them.
+    private static func convert(_ content: NSAttributedString,
+                                from oldMode: TextContentMode,
+                                to newMode: TextContentMode) -> NSAttributedString {
+        switch newMode {
+        case .richText:
+            return oldMode == .markdown
+                ? MarkdownRenderer.render(content.string)
+                : NSAttributedString(string: content.string,
+                                     attributes: ClipboardReader.defaultTextAttributes())
+        case .plainText, .markdown:
+            return NSAttributedString(string: content.string,
+                                      attributes: ClipboardReader.defaultTextAttributes())
+        }
     }
 
     /// Applies the global default; a pin the user switched individually keeps
@@ -224,9 +243,16 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
             textView.typingAttributes = attributed.length > 0
                 ? attributed.attributes(at: attributed.length - 1, effectiveRange: nil)
                 : ClipboardReader.defaultTextAttributes()
+        case .plainText:
+            sourceText = attributed.string
+            textView.textStorage?.setAttributedString(
+                NSAttributedString(string: sourceText,
+                                   attributes: ClipboardReader.defaultTextAttributes())
+            )
+            textView.typingAttributes = ClipboardReader.defaultTextAttributes()
         case .markdown:
-            markdownSource = attributed.string
-            textView.textStorage?.setAttributedString(MarkdownRenderer.render(markdownSource))
+            sourceText = attributed.string
+            textView.textStorage?.setAttributedString(MarkdownRenderer.render(sourceText))
             textView.typingAttributes = Self.sourceAttributes
         }
         syncWrapWidth()
@@ -243,7 +269,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
                 textView.isRichText = false
                 textView.typingAttributes = Self.sourceAttributes
                 textView.textStorage?.setAttributedString(
-                    NSAttributedString(string: markdownSource, attributes: Self.sourceAttributes)
+                    NSAttributedString(string: sourceText, attributes: Self.sourceAttributes)
                 )
             }
             textView.setEditableMode()
@@ -251,7 +277,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
             showFormatToolbar()
         }
         window?.makeFirstResponder(textView)
-        if let pointInTextView, textMode == .richText {
+        if let pointInTextView, textMode != .markdown {
             let index = textView.characterIndexForInsertion(at: pointInTextView)
             textView.setSelectedRange(NSRange(location: index, length: 0))
         }
@@ -265,9 +291,9 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         isEditing = false
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         if textMode == .markdown {
-            markdownSource = textView.string
+            sourceText = textView.string
             textView.isRichText = false
-            textView.textStorage?.setAttributedString(MarkdownRenderer.render(markdownSource))
+            textView.textStorage?.setAttributedString(MarkdownRenderer.render(sourceText))
             textView.typingAttributes = Self.sourceAttributes
         }
         textView.setReadOnlyMode()
@@ -314,10 +340,10 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         // Any real edit makes the pre-switch representation stale.
         modeBackup = nil
-        if textMode == .markdown {
-            markdownSource = textView.string
-        } else {
+        if textMode == .richText {
             formatToolbar?.syncFromSelection()
+        } else {
+            sourceText = textView.string
         }
         pinController?.contentDidChange()
     }
@@ -351,8 +377,8 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     func cursor(at point: NSPoint) -> NSCursor { isEditing ? .iBeam : .openHand }
 
     /// Rich text writes RTFD/RTF plus a plain text fallback, so formatting
-    /// survives the round trip. A Markdown pin's data is its source, so it
-    /// copies verbatim.
+    /// survives the round trip. Plain Text and Markdown pins carry no
+    /// formatting, so they copy their source verbatim.
     func copyToPasteboard() {
         copy(to: .general)
     }
@@ -364,8 +390,8 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         switch textMode {
         case .richText:
             pasteboard.writeObjects([attributedString])
-        case .markdown:
-            pasteboard.setString(markdownSource, forType: .string)
+        case .plainText, .markdown:
+            pasteboard.setString(attributedString.string, forType: .string)
         }
     }
 
@@ -373,9 +399,8 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         let tooltip: String
         switch (textMode, isEditing) {
         case (.markdown, false): tooltip = "Edit Markdown Source"
-        case (.markdown, true): tooltip = "Done Editing"
-        case (.richText, false): tooltip = "Edit Text"
-        case (.richText, true): tooltip = "Done Editing"
+        case (_, true): tooltip = "Done Editing"
+        case (.richText, false), (.plainText, false): tooltip = "Edit Text"
         }
         return [ChromeItem(symbol: isEditing ? "checkmark" : "pencil",
                            tooltip: tooltip,

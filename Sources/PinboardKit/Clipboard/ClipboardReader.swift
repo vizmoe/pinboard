@@ -18,7 +18,7 @@ enum ClipboardReader {
     }
 
     static func defaultTextAttributes() -> [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: NSColor.labelColor]
+        TextDefaults.attributes
     }
 
     private static func nonEmpty(_ text: NSAttributedString?) -> NSAttributedString? {

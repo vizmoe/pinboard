@@ -35,8 +35,9 @@ final class HistoryViewModel: ObservableObject {
         pasteboard.clearContents()
         switch entry.content {
         case .text(let attributed):
-            // A Markdown record's data is its source, matching the live pin.
-            if entry.textMode == .markdown {
+            // Plain Text and Markdown records hold no formatting; their data
+            // is the source, matching the live pin.
+            if entry.textMode == .markdown || entry.textMode == .plainText {
                 pasteboard.setString(attributed.string, forType: .string)
             } else {
                 pasteboard.writeObjects([attributed])
@@ -174,9 +175,7 @@ struct HistoryView: View {
             }
             Divider()
             HStack {
-                Text(record.kind == .text
-                     ? (record.textMode == .markdown ? "Markdown" : "Text")
-                     : "Image")
+                Text(kindLabel(of: record))
                     .font(.caption).foregroundStyle(.secondary)
                 Text("·")
                 Text(record.updatedAt, style: .date)
@@ -189,6 +188,15 @@ struct HistoryView: View {
                 Button("Delete", role: .destructive) { model.delete(record.id) }
             }
             .padding(10)
+        }
+    }
+
+    private func kindLabel(of record: HistoryRecord) -> String {
+        guard record.kind == .text else { return "Image" }
+        switch record.textMode {
+        case .plainText: return "Plain Text"
+        case .markdown: return "Markdown"
+        case .richText, nil: return "Text"
         }
     }
 

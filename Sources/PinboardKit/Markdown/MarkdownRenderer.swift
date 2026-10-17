@@ -12,7 +12,7 @@ import AppKit
 /// document. Copying a Markdown pin copies its source instead.
 enum MarkdownRenderer {
     struct Style {
-        var baseFont: NSFont = .systemFont(ofSize: NSFont.systemFontSize)
+        var baseFont: NSFont = TextDefaults.font
         var textColor: NSColor = .labelColor
         var secondaryTextColor: NSColor = .secondaryLabelColor
         var linkColor: NSColor = .linkColor
@@ -20,6 +20,10 @@ enum MarkdownRenderer {
 
         static let `default` = Style()
     }
+
+    /// Slant added when the base family has no italic face (e.g. PingFang SC),
+    /// so emphasised runs stay visually distinct.
+    static let syntheticObliqueness: CGFloat = 0.2
 
     /// Number of "─" glyphs used for `---` thematic breaks. Long enough to
     /// read as a rule at the pins' usual widths.
@@ -48,20 +52,19 @@ enum MarkdownRenderer {
         return builder.finish()
     }
 
-    /// Returns `font` with the given traits, falling back gracefully for
-    /// families that lack a bold or italic face.
+    /// Returns `font` with the given traits, falling back gracefully: a family
+    /// without an italic face keeps the traits it does have (PingFang SC, for
+    /// example, has bold but no italic), and callers add synthetic
+    /// `obliqueness` when italic could not be resolved.
     static func font(from base: NSFont, bold: Bool, italic: Bool = false, size: CGFloat? = nil) -> NSFont {
         let pointSize = size ?? base.pointSize
-        var traits: NSFontDescriptor.SymbolicTraits = []
-        if bold { traits.insert(.bold) }
-        if italic { traits.insert(.italic) }
-        guard !traits.isEmpty else {
-            return NSFont(descriptor: base.fontDescriptor, size: pointSize) ?? base
+        func resolve(_ traits: NSFontDescriptor.SymbolicTraits) -> NSFont? {
+            NSFont(descriptor: base.fontDescriptor.withSymbolicTraits(traits), size: pointSize)
         }
-        let descriptor = base.fontDescriptor.withSymbolicTraits(traits)
-        return NSFont(descriptor: descriptor, size: pointSize)
-            ?? NSFont(descriptor: base.fontDescriptor, size: pointSize)
-            ?? base
+        if bold, italic, let font = resolve([.bold, .italic]) { return font }
+        if bold, let font = resolve(.bold) { return font }
+        if italic, let font = resolve(.italic) { return font }
+        return NSFont(descriptor: base.fontDescriptor, size: pointSize) ?? base
     }
 
     /// The concrete face behind a (possibly dynamic) base font. Using one
@@ -330,6 +333,9 @@ enum MarkdownRenderer {
                 .font: font,
                 .foregroundColor: style.textColor
             ]
+            if italic, !font.fontDescriptor.symbolicTraits.contains(.italic) {
+                attributes[.obliqueness] = MarkdownRenderer.syntheticObliqueness
+            }
             if isCode {
                 attributes[.backgroundColor] = style.codeBackgroundColor
             }

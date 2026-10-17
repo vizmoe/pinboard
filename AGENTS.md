@@ -49,8 +49,10 @@ library so it can be unit tested (`@testable import PinboardKit`).
 - `Clipboard` — pasteboard resolution (RTFD > RTF > image > HTML > plain)
 - `Windows` — `PinPanel`, `PinRootView`, `PinWindowController`,
   `PinWindowManager`, drag/resize event loops, hover chrome
-- `Text` — `TextPinView` / `PinTextView` (rich text / Markdown source editing),
-  `TextFormatter` (attribute logic, unit tested), `TextFormatToolbar`
+- `Text` — `TextPinView` / `PinTextView` (rich text / plain text / Markdown
+  source editing), `TextFormatter` (attribute logic, unit tested),
+  `TextFormatToolbar`, `TextDefaults` (PingFang SC 14, the app-wide default
+  typography)
 - `Markdown` — `MarkdownRenderer` (Foundation cmark `PresentationIntent` walk →
   display-only attributed string, unit tested)
 - `Image` — `ImagePinView` plus `Image/Annotation` (model, store with undo,
@@ -93,14 +95,20 @@ Window management never inspects content specifics: pin views conform to
   global `Preferences` seed). `AnnotationStyle.fontName` is optional so old
   payloads still decode. Settings hosts Keyboard Shortcuts, Text (mode) and
   History; other preferences persist silently as fixed defaults.
-- Text pins have two modes (`TextContentMode`). A Markdown pin's canonical
+- Text pins have three modes (`TextContentMode`). A Markdown pin's canonical
   content is the **raw source** (kept as the `.text` attributed string), the
   idle display is `MarkdownRenderer.render(source)`, and editing shows the
-  source with no format toolbar; a rich pin is unchanged. `Preferences.textMode`
-  is the default for new pins and for pins whose `hasExplicitTextMode` is false;
-  a context-menu switch sets it explicitly. `setTextMode` keeps a one-step
-  `modeBackup` so switching back before the next edit restores the exact
-  previous representation.
+  source with no format toolbar; a Plain Text pin shows the same characters in
+  `TextDefaults` typography (PingFang SC 14) with formatting dropped; a rich
+  pin is unchanged. All default typography lives in `TextDefaults` —
+  `ClipboardReader.defaultTextAttributes`, `TextFormatter.baseFont`,
+  `MarkdownRenderer.Style.default` and the raw-source editor all read it.
+  PingFang SC has no italic face, so `MarkdownRenderer` adds `obliqueness` to
+  emphasised runs when the resolved font lacks the trait.
+  `Preferences.textMode` is the default for new pins and for pins whose
+  `hasExplicitTextMode` is false; the context menu's *Text Mode* submenu sets
+  it explicitly. `setTextMode` keeps a one-step `modeBackup` so switching back
+  before the next edit restores the exact previous representation.
 - History: one directory per record under
   `~/Library/Application Support/Pinboard/History/<uuid>/` (`record.json` +
   payload files) so a corrupt record can only lose itself. Pins link to their

@@ -10,7 +10,7 @@ import AppKit
 struct TextFormatter {
     let textView: NSTextView
 
-    static let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+    static let baseFont = TextDefaults.font
 
     // MARK: - Current state
 

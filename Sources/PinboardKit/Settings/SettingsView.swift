@@ -35,7 +35,7 @@ struct SettingsView: View {
                         Text(mode.title).tag(mode)
                     }
                 }
-                Text("Rich Text preserves fonts and colours. Markdown renders headings, lists, quotes and code; click a pin to edit its source.")
+                Text("Rich Text preserves fonts and colours. Plain Text drops formatting and uses the default font. Markdown renders headings, lists, quotes and code; click a pin to edit its source.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

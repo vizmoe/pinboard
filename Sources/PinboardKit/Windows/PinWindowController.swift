@@ -209,7 +209,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 self.setBackgroundVisible(!self.rootView.drawsBackground)
             })
-            menu.addItem(markdownModeItem())
+            menu.addItem(textModeItem())
         }
         menu.addItem(.separator())
         menu.addItem(actionItem("Hide Pin") { [weak self] in
@@ -227,18 +227,22 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         return item
     }
 
-    /// Per-window text mode switch. Checking it makes this pin render and edit
-    /// Markdown; the global default keeps applying only to pins that were never
-    /// switched here.
-    private func markdownModeItem() -> NSMenuItem {
-        let isMarkdown = (contentView as? TextPinView)?.textMode == .markdown
-        let item = actionItem("Markdown Mode") { [weak self] in
-            guard let self, let textView = self.contentView as? TextPinView else { return }
-            let mode: TextContentMode = textView.textMode == .markdown ? .richText : .markdown
-            textView.setTextMode(mode, explicit: true)
-            self.contentDidChange()
+    /// Per-window text mode picker. Choosing a mode here makes this pin stop
+    /// following the global default; other pins are unaffected.
+    private func textModeItem() -> NSMenuItem {
+        let current = (contentView as? TextPinView)?.textMode
+        let item = NSMenuItem(title: "Text Mode", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for mode in TextContentMode.allCases {
+            let entry = actionItem(mode.title) { [weak self] in
+                guard let self, let textView = self.contentView as? TextPinView else { return }
+                textView.setTextMode(mode, explicit: true)
+                self.contentDidChange()
+            }
+            entry.state = current == mode ? .on : .off
+            submenu.addItem(entry)
         }
-        item.state = isMarkdown ? .on : .off
+        item.submenu = submenu
         return item
     }
 
