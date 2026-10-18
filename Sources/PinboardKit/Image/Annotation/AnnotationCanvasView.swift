@@ -343,6 +343,21 @@ final class AnnotationCanvasView: NSView {
 
     // MARK: - Text annotations
 
+    /// A read-only snapshot for previews, including the field's unsaved text.
+    /// Never commits the editor or adds an undo step just to open a menu.
+    var previewAnnotations: [Annotation] {
+        var annotations = store.annotations
+        if var annotation = editingAnnotation, let textEditor {
+            annotation.text = textEditor.stringValue
+            if let index = annotations.firstIndex(where: { $0.id == annotation.id }) {
+                annotations[index] = annotation
+            } else {
+                annotations.append(annotation)
+            }
+        }
+        return annotations
+    }
+
     private func beginTextEditing(at imageOrigin: CGPoint) {
         let annotation = Annotation(tool: .text, points: [imageOrigin], style: style, text: "")
         presentTextEditor(for: annotation, isNew: true)

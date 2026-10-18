@@ -34,6 +34,45 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     var minimumPinSize: CGSize { CGSize(width: 140, height: 56) }
 
+    var previewTitle: String {
+        let text = textView.string
+        let prefix = text.prefix(240)
+        let summary = prefix.replacingOccurrences(of: "\u{FFFC}", with: "Image")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !summary.isEmpty else { return "Empty Text" }
+        let truncated = summary.count > 60 || prefix.endIndex != text.endIndex
+        return String(summary.prefix(60)) + (truncated ? "…" : "")
+    }
+
+    func menuPreview(fitting maxSize: CGSize) -> NSImage? {
+        // Use the live display (including resolved attachments or unsaved source)
+        // in an independent TextKit stack; never relayout the user's editor.
+        guard let live = textView.textStorage, maxSize.width > 24, maxSize.height > 24 else { return nil }
+        let length = min(live.length, 4096)
+        let range = (live.string as NSString).rangeOfComposedCharacterSequences(for: NSRange(location: 0, length: length))
+        let storage = NSTextStorage(attributedString: live.attributedSubstring(from: range))
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: maxSize.width - 24, height: maxSize.height - 24))
+        container.lineFragmentPadding = 0
+        container.lineBreakMode = .byTruncatingTail
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        let glyphs = layout.glyphRange(for: container)
+        let paper = textMode == .markdown ? markdownTheme.background : nil
+        return PinMenuPreview.image(size: maxSize) { graphics, rect in
+            (paper ?? NSColor.textBackgroundColor).setFill()
+            rect.fill()
+            let context = graphics.cgContext
+            context.translateBy(x: 12, y: rect.height - 12)
+            context.scaleBy(x: 1, y: -1)
+            context.clip(to: CGRect(origin: .zero, size: container.size))
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+            layout.drawBackground(forGlyphRange: glyphs, at: .zero)
+            layout.drawGlyphs(forGlyphRange: glyphs, at: .zero)
+        }
+    }
+
     /// Exposed for `TextFormatter`, which applies attributes to this view.
     var editableTextView: NSTextView { textView }
 

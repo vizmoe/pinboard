@@ -18,6 +18,25 @@ final class ImagePinView: NSView, PinContentDisplaying {
     private(set) var isAnnotating = false
 
     var minimumPinSize: CGSize { CGSize(width: 60, height: 40) }
+
+    var previewTitle: String {
+        "\(annotationStore.isEmpty ? "Image" : "Annotated Image") · \(Int(sourceRect.width)) × \(Int(sourceRect.height))"
+    }
+
+    func menuPreview(fitting maxSize: CGSize) -> NSImage? {
+        let source = sourceRect
+        guard let baseCGImage, source.width > 0, source.height > 0 else { return nil }
+        let scale = min(maxSize.width / source.width, maxSize.height / source.height, 1)
+        let size = CGSize(width: source.width * scale, height: source.height * scale)
+        return PinMenuPreview.image(size: size) { context, rect in
+            NSColor.textBackgroundColor.setFill()
+            rect.fill()
+            context.cgContext.scaleBy(x: scale, y: scale)
+            context.cgContext.translateBy(x: -source.minX, y: -source.minY)
+            context.cgContext.draw(baseCGImage, in: CGRect(origin: .zero, size: pixelSize))
+            AnnotationRenderer.draw(canvas.previewAnnotations, imageSize: pixelSize, effects: effects, in: context)
+        }
+    }
     var contentAspectRatio: CGSize? { sourceRect.size }
     var pinUndoManager: UndoManager? { isAnnotating ? annotationStore.undoManager : nil }
 

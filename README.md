@@ -11,6 +11,11 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
 
 - **Pin the clipboard** — one action converts text, RTF, or an image into a
   borderless always-on-top window. Multiple pins coexist independently.
+- **Current pins in the menu bar** — open **Current Pins** to see text summaries
+  and image thumbnails, including hidden pins. Expand a pin for a larger content
+  preview, then choose **Show Pin** or **Close Pin**. Previews reflect current
+  edits, image annotations and crop; closing one pin keeps the others and its
+  saved history. A checkmark identifies a visible pin.
 - **Editable rich text** — click to type, select, undo/redo; fonts, colors,
   backgrounds and paragraph styles survive import, editing and copy-out.
 - **Three text modes** — Rich Text keeps everything above; Plain Text drops

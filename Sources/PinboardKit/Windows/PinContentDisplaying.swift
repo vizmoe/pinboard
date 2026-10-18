@@ -9,6 +9,10 @@ protocol PinContentDisplaying: NSView {
     var contentAspectRatio: CGSize? { get }
     var minimumPinSize: CGSize { get }
 
+    /// Read-only menu presentation; must not commit edits or encode payloads.
+    var previewTitle: String { get }
+    func menuPreview(fitting maxSize: CGSize) -> NSImage?
+
     func idealSize(fitting maxSize: CGSize) -> CGSize
     func currentContent() -> PinContent
     func captureState() -> PinContentState
