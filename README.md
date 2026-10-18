@@ -11,11 +11,13 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
 
 - **Pin the clipboard** — one action converts text, RTF, or an image into a
   borderless always-on-top window. Multiple pins coexist independently.
-- **Current pins in the menu bar** — open **Current Pins** to see text summaries
-  and image thumbnails, including hidden pins. Expand a pin for a larger content
-  preview, then choose **Show Pin** or **Close Pin**. Previews reflect current
-  edits, image annotations and crop; closing one pin keeps the others and its
-  saved history. A checkmark identifies a visible pin.
+- **Pins panel in the menu bar** — click the status icon to see all current
+  pins with content previews and Visible/Hidden labels. Use **Show**, **Hide**
+  or **Close** on an individual pin, or **Show All**, **Hide All** and **Close All**
+  below the **Pins** heading. The list stays open and updates after actions;
+  long lists scroll while bulk controls remain visible. Closing a pin keeps
+  its saved history. Click outside, press Escape or click the icon again to
+  dismiss the panel. Pin Clipboard, History, Settings and Quit are at the bottom.
 - **Editable rich text** — click to type, select, undo/redo; fonts, colors,
   backgrounds and paragraph styles survive import, editing and copy-out.
 - **Three text modes** — Rich Text keeps everything above; Plain Text drops
@@ -78,8 +80,8 @@ Notes:
   shows all hidden pins; with no pins it does nothing.
 - Unknown commands are ignored safely.
 - Commands do not steal keyboard focus from the app you're using.
-- The same commands are available from the menu bar icon; both paths share
-  the same window-management logic.
+- The status panel provides pin creation and individual or bulk Show/Hide/Close
+  controls through the same window manager. `toggle` remains available via URL.
 
 ## Building
 

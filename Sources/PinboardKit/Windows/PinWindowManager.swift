@@ -152,6 +152,7 @@ final class PinWindowManager {
 
     /// Debounced entry point called by pin views whenever content mutates.
     func pinContentDidChange(_ controller: PinWindowController) {
+        notifyChange()
         guard let id = controller.historyRecordID, historyStore != nil else { return }
         dirtyHistoryRecords.insert(id)
         pendingHistoryWrites[id]?.cancel()
