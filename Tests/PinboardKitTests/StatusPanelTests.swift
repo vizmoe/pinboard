@@ -132,8 +132,8 @@ final class StatusPanelTests: XCTestCase {
             XCTAssertEqual(button.imagePosition, .imageOnly)
             XCTAssertFalse(button.toolTip?.isEmpty ?? true)
             XCTAssertFalse(button.accessibilityLabel()?.isEmpty ?? true)
-            XCTAssertGreaterThanOrEqual(button.frame.width, 28)
-            XCTAssertGreaterThanOrEqual(button.frame.height, 28)
+            XCTAssertTrue((24...26).contains(button.frame.width))
+            XCTAssertTrue((24...26).contains(button.frame.height))
         }
     }
 
@@ -157,7 +157,7 @@ final class StatusPanelTests: XCTestCase {
         first.closePin()
         flushUpdates()
         XCTAssertTrue(panel.rows.isEmpty)
-        XCTAssertEqual(panel.countLabel.stringValue, "0 total · 0 visible")
+        XCTAssertEqual(panel.view.accessibilityLabel(), "Pins: 0 total, 0 visible")
         XCTAssertTrue(controller.popover.isShown)
     }
 
@@ -344,7 +344,7 @@ final class StatusPanelTests: XCTestCase {
     }
 
     private func capture(_ name: String) throws {
-        flushUpdates()
+        try assertPopoverFitsActivePage(name)
         XCTAssertTrue(controller.popover.isShown)
         let view = try XCTUnwrap(controller.popover.contentViewController?.view)
         view.layoutSubtreeIfNeeded()

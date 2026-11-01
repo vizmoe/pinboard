@@ -13,21 +13,17 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
     let detailScrollView = NSScrollView()
     let detailTextView = NSTextView()
     let detailImageView = NSImageView()
-    let countLabel = NSTextField(labelWithString: "")
     private(set) var records: [HistoryRecord] = []
     private(set) var isConfirmingClear = false
-    private let header = MenuBarPanelHeader(title: "History", showingHistory: true)
-    private let detailLabel = NSTextField(labelWithString: "")
-    private let emptyIcon = NSImageView()
-    private let message = NSTextField(wrappingLabelWithString: "")
-    private let detailActions = NSStackView()
-    private let confirmationActions = NSStackView()
-    private let footer = MenuBarPanelFooter()
-    private let separator = NSBox()
-    private var backButton: NSButton!
+    private let toolbar = MenuBarPanelToolbar(showingHistory: true)
+    private let errorIcon = NSImageView()
+    private var detailButtons: [NSButton] = []
+    private var confirmationButtons: [NSButton] = []
     private var clearButton: NSButton!
     private var updating = false
     private var listOrigin = NSPoint.zero
+    private var listHeight: CGFloat = 0
+    private var detailHeight: CGFloat = 40
 
     init(model: HistoryViewModel?) {
         self.model = model
@@ -38,39 +34,33 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     override func loadView() {
-        let root = MenuBarPanelRootView(frame: NSRect(x: 0, y: 0, width: 380, height: 486))
+        let root = MenuBarPanelRootView(frame: NSRect(x: 0, y: 0, width: 320, height: 78))
         root.onLayout = { [weak self] in self?.layoutContent() }
         root.onDismiss = { [weak self] in self?.onDismiss?() }
         view = root
         preferredContentSize = root.frame.size
-        header.onPins = { [weak self] in self?.onBack?() }
-        header.onHistory = { [weak self] in
+        toolbar.onPins = { [weak self] in self?.onBack?() }
+        toolbar.onHistory = { [weak self] in
             self?.model?.selection = nil
             self?.isConfirmingClear = false
             self?.reloadHistory()
             self?.focusSearch()
         }
-        header.onPaste = { [weak self] in self?.onUtilityAction?(.paste) }
-        footer.onSettings = { [weak self] in self?.onUtilityAction?(.settings) }
-        footer.onQuit = { [weak self] in self?.onUtilityAction?(.quit) }
-        backButton = button("Back", symbol: "chevron.left", action: #selector(back))
-        detailLabel.font = .systemFont(ofSize: 11)
-        detailLabel.textColor = .secondaryLabelColor
-        detailLabel.lineBreakMode = .byTruncatingTail
-        emptyIcon.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 30, weight: .light))
-        emptyIcon.contentTintColor = .tertiaryLabelColor
-        countLabel.font = .systemFont(ofSize: 11)
-        countLabel.textColor = .secondaryLabelColor
+        toolbar.onPaste = { [weak self] in self?.onUtilityAction?(.paste) }
+        toolbar.onSettings = { [weak self] in self?.onUtilityAction?(.settings) }
+        toolbar.onQuit = { [weak self] in self?.onUtilityAction?(.quit) }
         clearButton = button("Clear History", symbol: "trash", action: #selector(requestClear))
-        searchField.placeholderString = "Search history"
+        searchField.placeholderString = ""
+        searchField.toolTip = "Search history"
         searchField.setAccessibilityLabel("Search history")
+        searchField.controlSize = .small
+        searchField.font = .systemFont(ofSize: 12)
         searchField.delegate = self
         searchField.sendsSearchStringImmediately = true
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("history"))
         tableView.addTableColumn(column)
         tableView.headerView = nil
-        tableView.rowHeight = 60
+        tableView.rowHeight = 48
         tableView.intercellSpacing = NSSize(width: 0, height: 4)
         tableView.backgroundColor = .clear
         tableView.style = .plain
@@ -90,58 +80,49 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         detailTextView.drawsBackground = false
         detailTextView.isVerticallyResizable = true
         detailTextView.isHorizontallyResizable = false
-        detailTextView.textContainerInset = NSSize(width: 12, height: 12)
+        detailTextView.textContainerInset = NSSize(width: 8, height: 8)
         detailTextView.textContainer?.widthTracksTextView = true
         detailImageView.imageScaling = .scaleProportionallyUpOrDown
         detailImageView.setAccessibilityLabel("Saved image preview")
-        message.alignment = .center
-        message.font = .systemFont(ofSize: 13)
-        message.textColor = .secondaryLabelColor
-        for (title, symbol, action) in [("Pin Again", "pin", #selector(pinAgain)), ("Copy", "doc.on.doc", #selector(copyRecord)), ("Delete", "trash", #selector(deleteRecord))] {
-            detailActions.addArrangedSubview(button(title, symbol: symbol, action: action))
+        errorIcon.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        errorIcon.contentTintColor = .secondaryLabelColor
+        errorIcon.toolTip = "Preview unavailable: this record's content could not be read."
+        errorIcon.setAccessibilityLabel(errorIcon.toolTip)
+        for (title, symbol, action) in [("Back", "chevron.left", #selector(back)), ("Pin Again", "pin", #selector(pinAgain)),
+                                        ("Copy", "doc.on.doc", #selector(copyRecord)), ("Delete", "trash", #selector(deleteRecord))] {
+            detailButtons.append(button(title, symbol: symbol, action: action))
         }
-        confirmationActions.addArrangedSubview(button("Cancel", symbol: "xmark", action: #selector(cancelClear)))
-        confirmationActions.addArrangedSubview(button("Confirm Clear", symbol: "trash.fill", action: #selector(confirmClear)))
-        for stack in [detailActions, confirmationActions] {
-            stack.spacing = 8
-            stack.distribution = .fillEqually
-        }
-        separator.boxType = .separator
-        for child in [header, backButton!, detailLabel, countLabel, clearButton!, searchField, scrollView,
-                      detailScrollView, emptyIcon, message, detailActions, confirmationActions, separator, footer] {
-            root.addSubview(child)
-        }
+        detailButtons.first?.toolTip = "Back to History"
+        detailButtons.first?.setAccessibilityLabel("Back to History")
+        let cancel = button("Cancel", symbol: "xmark", action: #selector(cancelClear))
+        let confirm = button("Confirm Clear", symbol: "trash.fill", action: #selector(confirmClear))
+        let explanation = "Confirm Clear: permanently delete saved history except records for open pins."
+        confirm.toolTip = explanation
+        confirm.setAccessibilityLabel(explanation)
+        confirmationButtons = [cancel, confirm]
+        [toolbar, searchField, scrollView, detailScrollView, errorIcon].forEach { root.addSubview($0) }
     }
 
     private func layoutContent() {
         let width = view.bounds.width
-        header.frame = NSRect(x: 16, y: 14, width: width - 32, height: 32)
-        backButton.frame = NSRect(x: 12, y: 60, width: 32, height: 32)
-        detailLabel.frame = NSRect(x: 52, y: 68, width: width - 68, height: 18)
-        clearButton.frame = NSRect(x: width - 48, y: 94, width: 32, height: 32)
-        searchField.frame = NSRect(x: 16, y: 60, width: width - 32, height: 28)
-        countLabel.frame = NSRect(x: 18, y: 102, width: width - 76, height: 18)
-        let content = NSRect(x: 12, y: 134, width: width - 24, height: view.bounds.height - 200)
-        scrollView.frame = content
+        toolbar.frame = NSRect(x: 10, y: 10, width: width - 20, height: 26)
+        searchField.frame = NSRect(x: 10, y: 46, width: width - 20, height: 24)
+        scrollView.frame = NSRect(x: 8, y: 78, width: width - 16, height: listHeight)
         tableView.tableColumns.first?.width = scrollView.contentSize.width
-        detailScrollView.frame = NSRect(x: 12, y: 102, width: width - 24, height: view.bounds.height - 218)
-        detailTextView.setFrameSize(NSSize(width: detailScrollView.contentSize.width, height: detailScrollView.contentSize.height))
-        detailTextView.textContainer?.containerSize = NSSize(width: detailScrollView.contentSize.width - 24,
+        detailScrollView.frame = NSRect(x: 8, y: 46, width: width - 16, height: detailHeight)
+        detailTextView.setFrameSize(detailScrollView.contentSize)
+        detailTextView.textContainer?.containerSize = NSSize(width: detailScrollView.contentSize.width - 16,
                                                            height: .greatestFiniteMagnitude)
         detailTextView.sizeToFit()
         detailImageView.frame = NSRect(origin: .zero, size: detailScrollView.contentSize)
-        emptyIcon.frame = NSRect(x: (width - 36) / 2, y: 192, width: 36, height: 36)
-        message.frame = NSRect(x: 32, y: 244, width: width - 64, height: 96)
-        detailActions.frame = NSRect(x: width - 128, y: view.bounds.height - 100, width: 112, height: 32)
-        confirmationActions.frame = NSRect(x: (width - 80) / 2, y: 350, width: 80, height: 32)
-        separator.frame = NSRect(x: 16, y: view.bounds.height - 54, width: width - 32, height: 1)
-        footer.frame = NSRect(x: 16, y: view.bounds.height - 42, width: width - 32, height: 32)
+        errorIcon.frame = NSRect(x: (width - 18) / 2, y: 50, width: 18, height: 18)
     }
 
     override func viewWillAppear() { super.viewWillAppear(); reloadHistory() }
 
     func focusSearch() {
-        view.window?.makeFirstResponder(model?.selection == nil ? searchField : view)
+        view.window?.makeFirstResponder(model?.selection == nil && !isConfirmingClear ? searchField : view)
     }
 
     func reloadHistory() {
@@ -157,42 +138,27 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         tableView.deselectAll(nil)
         let detail = model?.record(for: model?.selection)
         let showingList = detail == nil && !isConfirmingClear
-        header.pinsButton.state = .off
-        header.historyButton.state = .on
-        backButton.isHidden = showingList
-        backButton.setAccessibilityLabel("Back to History")
-        backButton.toolTip = "Back to History"
-        detailLabel.isHidden = showingList
-        detailLabel.stringValue = detail.map {
-            "\(Self.kindLabel($0)) · \($0.updatedAt.formatted(date: .abbreviated, time: .shortened))"
-        } ?? "Clear History"
-        countLabel.stringValue = "\(records.count) saved item\(records.count == 1 ? "" : "s")"
+        toolbar.pinsButton.state = .off
+        toolbar.historyButton.state = .on
+        view.setAccessibilityLabel(isConfirmingClear ? "Confirm clearing history" : "History: \(records.count) saved items")
+        toolbar.setActions(isConfirmingClear ? confirmationButtons : detail != nil ? detailButtons : [clearButton])
         searchField.isHidden = !showingList
-        countLabel.isHidden = !showingList
-        clearButton.isHidden = !showingList
         clearButton.isEnabled = !(model?.records.isEmpty ?? true)
         scrollView.isHidden = !showingList || records.isEmpty
         detailScrollView.isHidden = detail == nil || isConfirmingClear
-        detailActions.isHidden = detail == nil || isConfirmingClear
-        confirmationActions.isHidden = !isConfirmingClear
-        message.isHidden = true
-        emptyIcon.isHidden = true
-        if isConfirmingClear {
-            setMessage("Clear saved history?", hint: "Records for open pins will be kept. Other records and their files will be permanently deleted.", symbol: "trash")
-            message.isHidden = false
-            emptyIcon.isHidden = false
-        } else if let detail {
-            showDetail(detail)
-        } else if records.isEmpty {
-            if model?.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-                setMessage("No Results", hint: "Try another search.", symbol: "magnifyingglass")
-            } else {
-                setMessage("No History", hint: "Items you pin will appear here.", symbol: "clock.arrow.circlepath")
-            }
-            message.isHidden = false
-            emptyIcon.isHidden = false
-        }
+        errorIcon.isHidden = true
+        if let detail, !isConfirmingClear { showDetail(detail) }
+        listHeight = min(CGFloat(records.count) * 52 - (records.isEmpty ? 0 : 4), 308)
+        let height: CGFloat
+        if isConfirmingClear { height = 46 }
+        else if detail != nil { height = errorIcon.isHidden ? 54 + detailHeight : 78 }
+        else { height = 78 + listHeight + (records.isEmpty ? 0 : 8) }
+        let size = NSSize(width: 320, height: height)
+        preferredContentSize = size
+        // The popover owns attached view frames; changing one creates stale margins.
+        if view.superview == nil { view.setFrameSize(size) }
         layoutContent()
+        view.layoutSubtreeIfNeeded()
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(listOrigin.y,
             max(0, tableView.bounds.height - scrollView.contentSize.height))))
         scrollView.reflectScrolledClipView(scrollView.contentView)
@@ -206,6 +172,11 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
             detailTextView.textStorage?.setAttributedString(display)
             detailTextView.setAccessibilityLabel("Saved text preview")
             detailScrollView.documentView = detailTextView
+            if let container = detailTextView.textContainer, let layout = detailTextView.layoutManager {
+                container.containerSize = NSSize(width: view.bounds.width - 32, height: .greatestFiniteMagnitude)
+                layout.ensureLayout(for: container)
+                detailHeight = min(224, max(40, ceil(layout.usedRect(for: container).height) + 16))
+            }
         case .image(let image):
             let preview = ImagePinView(image: image)
             if let data = state.annotationData {
@@ -214,30 +185,15 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
             }
             detailImageView.image = preview.menuPreview(fitting: NSSize(width: 800, height: 600))
             detailScrollView.documentView = detailImageView
+            if let size = detailImageView.image?.size, size.width > 0 {
+                detailHeight = min(224, max(40, ceil((view.bounds.width - 16) * size.height / size.width)))
+            }
         }
     }
 
     private func showUnreadable() {
         detailScrollView.isHidden = true
-        setMessage("Preview Unavailable", hint: "This record's content could not be read.", symbol: "exclamationmark.triangle")
-        message.isHidden = false
-        emptyIcon.isHidden = false
-    }
-
-    private func setMessage(_ title: String, hint: String, symbol: String) {
-        let text = NSMutableAttributedString(string: title + "\n\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 15, weight: .medium), .foregroundColor: NSColor.labelColor
-        ])
-        text.append(NSAttributedString(string: hint, attributes: [
-            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor
-        ]))
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineSpacing = 2
-        text.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: text.length))
-        message.attributedStringValue = text
-        emptyIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 30, weight: .light))
+        errorIcon.isHidden = false
     }
 
     private static func kindLabel(_ record: HistoryRecord) -> String {
@@ -249,28 +205,23 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         }
     }
 
-    private static let relativeDate: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
-
     func numberOfRows(in tableView: NSTableView) -> Int { records.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard records.indices.contains(row) else { return nil }
         let record = records[row]
         let cell = HistoryRowView()
-        cell.titleLabel.stringValue = record.preview
-        cell.titleLabel.toolTip = record.preview
-        let now = Date()
-        let date = now.timeIntervalSince(record.updatedAt) < 60 ? "Just now"
-            : Self.relativeDate.localizedString(for: record.updatedAt, relativeTo: now)
-        cell.subtitleLabel.stringValue = "\(Self.kindLabel(record)) · \(date)"
-        cell.subtitleLabel.toolTip = record.updatedAt.formatted(date: .abbreviated, time: .shortened)
+        let text = record.kind == .text ? (record.text ?? "").replacingOccurrences(of: "\u{FFFC}", with: "")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ") : ""
+        cell.titleLabel.stringValue = String(text.prefix(120))
+        cell.titleLabel.isHidden = text.isEmpty
+        let description = "\(record.preview), \(Self.kindLabel(record)), \(record.updatedAt.formatted(date: .abbreviated, time: .shortened))"
+        cell.toolTip = description
         cell.previewView.image = record.kind == .image ? model?.store.image(id: record.id)
-            : NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
-        cell.setAccessibilityLabel("\(record.preview), \(cell.subtitleLabel.stringValue)")
+            : NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        cell.previewView.imageScaling = record.kind == .image ? .scaleProportionallyUpOrDown : .scaleProportionallyDown
+        cell.setAccessibilityLabel(description)
         return cell
     }
 
@@ -294,11 +245,7 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         return button
     }
 
-    @objc private func back() {
-        if isConfirmingClear { cancelClear() }
-        else if model?.selection != nil { model?.selection = nil; reloadHistory(); focusSearch() }
-        else { onBack?() }
-    }
+    @objc private func back() { model?.selection = nil; reloadHistory(); focusSearch() }
     @objc private func requestClear() { isConfirmingClear = true; reloadHistory(); view.window?.makeFirstResponder(view) }
     @objc private func cancelClear() { isConfirmingClear = false; reloadHistory(); focusSearch() }
     @objc private func confirmClear() { isConfirmingClear = false; model?.clearAll(); reloadHistory(); focusSearch() }
@@ -310,34 +257,29 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
 final class HistoryRowView: NSTableCellView {
     let previewView = NSImageView()
     let titleLabel = NSTextField(labelWithString: "")
-    let subtitleLabel = NSTextField(labelWithString: "")
     private let chevron = NSImageView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.font = .systemFont(ofSize: 12)
         titleLabel.lineBreakMode = .byTruncatingTail
-        subtitleLabel.font = .systemFont(ofSize: 10)
-        subtitleLabel.textColor = .secondaryLabelColor
-        subtitleLabel.lineBreakMode = .byTruncatingTail
         previewView.imageScaling = .scaleProportionallyUpOrDown
         wantsLayer = true
-        layer?.cornerRadius = 8
-        chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)
+        layer?.cornerRadius = 7
+        chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .regular))
         chevron.contentTintColor = .tertiaryLabelColor
-        [previewView, titleLabel, subtitleLabel, chevron].forEach { addSubview($0) }
+        [previewView, titleLabel, chevron].forEach { addSubview($0) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() { layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.04).cgColor }
 
     override func layout() {
         super.layout()
-        chevron.frame = NSRect(x: bounds.width - 24, y: 23, width: 12, height: 14)
-        previewView.frame = NSRect(x: 8, y: 10, width: 40, height: 40)
-        titleLabel.frame = NSRect(x: 60, y: 32, width: max(0, bounds.width - 94), height: 18)
-        subtitleLabel.frame = NSRect(x: 60, y: 12, width: max(0, bounds.width - 94), height: 16)
+        chevron.frame = NSRect(x: bounds.width - 20, y: 19, width: 8, height: 10)
+        previewView.frame = NSRect(x: 8, y: 6, width: titleLabel.isHidden ? bounds.width - 40 : 32, height: 36)
+        titleLabel.frame = NSRect(x: 48, y: 15, width: max(0, bounds.width - 80), height: 18)
     }
 }

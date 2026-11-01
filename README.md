@@ -12,12 +12,13 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
 - **Pin the clipboard** — one action converts text, RTF, or an image into a
   borderless always-on-top window. Multiple pins coexist independently.
 - **Pins panel in the menu bar** — click the status icon to see all current
-  pins with content previews and Visible/Hidden labels. The eye, crossed eye
-  and close icons beside the count act on all pins; the icons inside a card act
-  on that pin. Closing a pin keeps its saved history. The pin and history icons
-  at the top switch pages in the same panel, and the plus icon pins the clipboard.
-  Settings and Quit stay at the bottom while long lists scroll. Hover an action
-  for its name; every icon also has an accessibility label. Click outside, press
+  pins with content previews; hidden pins are dimmed. A compact icon strip
+  switches between Pins and History, pins the clipboard with the plus icon,
+  and keeps Settings and Quit available while lists scroll. The eye, crossed
+  eye and close icons in the strip act on all pins; those inside a card act on
+  that pin. Closing a pin keeps its saved history. Empty Pins shows only the
+  strip. Hover an action for its name; every icon also has an accessibility
+  label. Click outside, press
   Escape or click the status icon again to dismiss the panel.
 - **Quick actions** — new pins appear at the pointer, clamped to the screen.
   Double-click an idle pin to copy its content and close it. Use the pencil or
@@ -52,8 +53,8 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
 - **Pin history** — every pin is recorded locally (latest edited state,
   including editable annotation data). Open History in the menu bar panel to
   search, preview, pin again, copy or delete an entry without leaving the panel.
-  Clear History asks for confirmation and keeps records associated with open
-  pins. Retention is configurable in Settings.
+  Clear History reveals cancel and red trash icons for confirmation and keeps
+  records associated with open pins. Retention is configurable in Settings.
 - **Transparent text pins** — text floats directly over the desktop; only
   runs you explicitly give a background to show one.
 - **Global hotkey** — `⌃⌥⇧⌘P` (Hyper+P) pins the clipboard from anywhere;
