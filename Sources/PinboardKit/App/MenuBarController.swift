@@ -11,6 +11,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var refreshScheduled = false
     private let onOpenSettings: () -> Void
     private let historyPasteboard: NSPasteboard
+    private var pinsSizeObservation: NSKeyValueObservation?
+    private var historySizeObservation: NSKeyValueObservation?
 
     init(manager: PinWindowManager, historyPasteboard: NSPasteboard = .general,
          onOpenSettings: @escaping () -> Void) {
@@ -32,6 +34,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         popover.animates = false
         popover.contentViewController = pinsViewController
         popover.delegate = self
+        pinsSizeObservation = observeSize(of: pinsViewController)
         pinsViewController.onUtilityAction = { [weak self] action in self?.perform(action) }
         pinsViewController.onDismiss = { [weak self] in self?.popover.performClose(nil) }
         manager.onChange = { [weak self] in self?.pinsDidChange() }
@@ -73,15 +76,32 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 guard let self else { return }
                 self.pinsViewController.reloadPins()
                 self.popover.contentViewController = self.pinsViewController
+                self.syncPopoverSize(for: self.pinsViewController)
                 self.pinsViewController.view.window?.makeFirstResponder(self.pinsViewController.view)
             }
             history.onDismiss = { [weak self] in self?.popover.performClose(nil) }
             history.onUtilityAction = { [weak self] in self?.perform($0) }
             historyViewController = history
+            historySizeObservation = observeSize(of: history)
         }
         historyViewController?.reloadHistory()
         popover.contentViewController = historyViewController
+        if let historyViewController { syncPopoverSize(for: historyViewController) }
         historyViewController?.focusSearch()
+    }
+
+    private func observeSize(of page: NSViewController) -> NSKeyValueObservation {
+        page.observe(\.preferredContentSize, options: [.new]) { [weak self] page, _ in
+            self?.syncPopoverSize(for: page)
+        }
+    }
+
+    private func syncPopoverSize(for page: NSViewController) {
+        // Older AppKit versions resize the page without updating the popover's
+        // content size. Only the active page may resize the shared container.
+        guard popover.contentViewController === page,
+              popover.contentSize != page.preferredContentSize else { return }
+        popover.contentSize = page.preferredContentSize
     }
 
     private func pinsDidChange() {
