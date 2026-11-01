@@ -94,6 +94,25 @@ Notes:
 - The status panel provides pin creation and individual or bulk Show/Hide/Close
   controls through the same window manager. `toggle` remains available via URL.
 
+## Installation
+
+Download a ZIP from [GitHub Releases](https://github.com/vizmoe/pinboard/releases):
+choose `arm64` for Apple Silicon or `x86_64` for Intel. Unzip it and move
+`Pinboard.app` to Applications. The minimum supported macOS version is defined
+in [Info.plist](Resources/Info.plist) (`LSMinimumSystemVersion`).
+
+Release builds are ad-hoc signed and are **not notarized**. If macOS blocks the
+first launch, follow Apple's [instructions for opening an app from an unidentified
+developer](https://support.apple.com/en-us/102445) in System Settings → Privacy &
+Security. Approve the app only if you trust the downloaded release.
+
+Each release includes `SHA256SUMS`. To verify one downloaded ZIP, keep both files
+in the same directory and check the matching entry, for example:
+
+```bash
+grep 'macos-arm64.zip$' SHA256SUMS | shasum -a 256 -c -
+```
+
 ## Building
 
 Requires Xcode (Swift toolchain) on macOS 13+.
@@ -106,6 +125,39 @@ swift test                      # headless unit tests
 
 If `xcode-select` points at CommandLineTools, prefix SwiftPM commands with
 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+
+## Releasing
+
+The [release workflow](.github/workflows/release.yml) runs tests and verifies
+installable archives on both supported architectures for PRs and `main`.
+Only version tags publish a Release, after all checks pass.
+
+Update `CFBundleShortVersionString` and `CFBundleVersion` in
+[Info.plist](Resources/Info.plist) through a PR. Once merged, tag the verified
+`main` commit with `v` followed by that version and push the tag:
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+git tag -a "v$VERSION" origin/main -m "Pinboard v$VERSION"
+git push origin "v$VERSION"
+```
+
+Use a fresh version for each release. Tags must have the form `vMAJOR.MINOR.PATCH`
+and match the bundle version. Failed runs can resume an unpublished draft;
+the workflow refuses to overwrite a published release.
+
+To build and verify a release archive for the current Mac locally:
+
+```bash
+./scripts/package-release.sh
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+./Tests/ReleasePackagingTests.sh "v$VERSION" "$(uname -m)"
+```
+
+Archives and checksums are written to the ignored `dist/` directory.
 
 ## Data & Privacy
 

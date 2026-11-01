@@ -3,6 +3,7 @@
 .swiftpm/
 build/
 DerivedData/
+dist/
 
 # macOS and Xcode user state
 .DS_Store
@@ -12,6 +13,7 @@ xcuserdata/
 # Keep the build script even when a global ignore excludes scripts directories.
 !/scripts/
 !/scripts/build-app.sh
+!/scripts/package-release.sh
 
 # Public C headers must remain visible despite global include-directory ignores.
 !/Sources/SafeImageDownload/include/
