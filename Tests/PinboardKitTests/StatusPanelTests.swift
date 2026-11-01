@@ -114,6 +114,9 @@ final class StatusPanelTests: XCTestCase {
                        "\(name): the active page must not be stretched or clipped", file: file, line: line)
         XCTAssertLessThanOrEqual(window.frame.height - expected.height, 40,
                                  "\(name): only native border/arrow space may surround the page", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(window.frame.height, expected.height,
+                                    "\(name): the window must not crop the active page", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(topInset, 0, file: file, line: line)
         XCTAssertLessThanOrEqual(topInset, 32,
                                  "\(name): unexpected blank space above the page (\(topInset) pt)", file: file, line: line)
     }
