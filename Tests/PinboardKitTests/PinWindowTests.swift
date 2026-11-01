@@ -65,7 +65,9 @@ final class PinWindowManagerTests: XCTestCase {
         XCTAssertFalse(first.isPinVisible)
         XCTAssertTrue(second.isPinVisible)
         XCTAssertNotEqual(first.id, second.id)
-        XCTAssertNotEqual(first.panel.frame.origin, second.panel.frame.origin, "new pins cascade")
+        second.setFrame(NSRect(x: first.panel.frame.minX + 30, y: first.panel.frame.minY,
+                               width: second.panel.frame.width, height: second.panel.frame.height))
+        XCTAssertNotEqual(first.panel.frame.origin, second.panel.frame.origin, "pins move independently")
 
         first.closePin()
         XCTAssertEqual(manager.count, 1)

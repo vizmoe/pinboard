@@ -11,11 +11,13 @@ final class AnnotationCanvasView: NSView {
     let imageSize: CGSize
     var effects: ImageEffects?
 
-    var tool: AnnotationTool = .rectangle {
+    var tool: AnnotationTool = .select {
+        willSet { if newValue != tool { commitTextEditor() } }
         didSet {
             if tool != .select { selectedID = nil }
             if tool != .crop { cropDraft = nil }
             needsDisplay = true
+            onSelectionChange?()
         }
     }
 
@@ -110,7 +112,8 @@ final class AnnotationCanvasView: NSView {
     }
 
     private func drawSelection() {
-        guard let selectedID, let annotation = store.annotation(with: selectedID) else { return }
+        guard let selectedID,
+              let annotation = draft?.id == selectedID ? draft : store.annotation(with: selectedID) else { return }
         let box = viewRect(from: annotation.boundingBox(textSizer: AnnotationRenderer.textSize)).insetBy(dx: -3, dy: -3)
         let path = NSBezierPath(rect: box)
         path.lineWidth = 1
@@ -118,9 +121,8 @@ final class AnnotationCanvasView: NSView {
         NSColor.controlAccentColor.setStroke()
         path.stroke()
         NSColor.controlAccentColor.setFill()
-        for corner in [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY),
-                       CGPoint(x: box.minX, y: box.maxY), CGPoint(x: box.maxX, y: box.maxY)] {
-            NSBezierPath(ovalIn: CGRect(x: corner.x - 3, y: corner.y - 3, width: 6, height: 6)).fill()
+        for point in selectionHandles(for: annotation).map({ viewPoint(from: $0) }) {
+            NSBezierPath(ovalIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)).fill()
         }
     }
 
@@ -155,6 +157,10 @@ final class AnnotationCanvasView: NSView {
         window.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
 
+        if let selected = selectedAnnotation, let handle = handleIndex(at: point, for: selected) {
+            runResizeLoop(for: selected, handle: handle)
+            return
+        }
         switch tool {
         case .select:
             if let hit = topmostAnnotation(at: imagePoint(from: point)) {
@@ -174,6 +180,8 @@ final class AnnotationCanvasView: NSView {
             runCropLoop(from: point)
         case .text:
             beginTextEditing(at: imagePoint(from: point))
+        case .counter:
+            addCounter(at: imagePoint(from: point))
         default:
             runDrawingLoop(from: point)
         }
@@ -190,7 +198,8 @@ final class AnnotationCanvasView: NSView {
         NSCursor.crosshair.set()
 
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
-            let current = imagePoint(from: convert(event.locationInWindow, from: nil))
+            var current = imagePoint(from: convert(event.locationInWindow, from: nil))
+            if event.modifierFlags.contains(.shift) { current = tool.constrainedEndpoint(from: start, to: current) }
             if tool == .freehand {
                 annotation.points.append(current)
             } else {
@@ -247,6 +256,77 @@ final class AnnotationCanvasView: NSView {
         needsDisplay = true
     }
 
+    /// Handles are hit-tested in view points so they remain usable at every zoom.
+    private func selectionHandles(for annotation: Annotation) -> [CGPoint] {
+        switch annotation.tool {
+        case .line, .arrow: return Array(annotation.points.prefix(2))
+        case .rectangle, .ellipse, .highlight, .blur, .mosaic:
+            let rect = annotation.rect
+            return [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+                    CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
+        default: return []
+        }
+    }
+
+    private func handleIndex(at point: CGPoint, for annotation: Annotation) -> Int? {
+        selectionHandles(for: annotation).firstIndex {
+            let handle = viewPoint(from: $0)
+            return hypot(handle.x - point.x, handle.y - point.y) <= 7
+        }
+    }
+
+    private func runResizeLoop(for annotation: Annotation, handle: Int) {
+        guard let window else { return }
+        let handles = selectionHandles(for: annotation)
+        let isLine = annotation.tool == .line || annotation.tool == .arrow
+        let fixed = handles[isLine ? 1 - handle : (handle + 2) % 4]
+        var resized = annotation
+        suppressedID = annotation.id
+        while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            var point = imagePoint(from: convert(event.locationInWindow, from: nil))
+            if event.modifierFlags.contains(.shift) {
+                point = annotation.tool.constrainedEndpoint(from: fixed, to: point)
+            }
+            if isLine { resized.points[handle] = point } else { resized.points = [fixed, point] }
+            draft = resized
+            needsDisplay = true
+            if event.type == .leftMouseUp { break }
+        }
+        suppressedID = nil
+        draft = nil
+        if resized != annotation, isMeaningful(resized) { store.update(resized, actionName: "Resize Annotation") }
+        needsDisplay = true
+    }
+
+    func addCounter(at point: CGPoint) {
+        let next = (store.annotations.filter { $0.tool == .counter }.compactMap { Int($0.text ?? "") }.max() ?? 0) + 1
+        let annotation = Annotation(tool: .counter, points: [point], style: style, text: String(next))
+        store.add(annotation)
+        selectedID = annotation.id
+        needsDisplay = true
+    }
+
+    func duplicateSelection() {
+        commitTextEditor()
+        guard var copy = selectedAnnotation else { return }
+        copy.id = UUID()
+        copy.translate(by: CGVector(dx: 10 / scaleX, dy: -10 / scaleY))
+        store.add(copy)
+        selectedID = copy.id
+        needsDisplay = true
+    }
+
+    func moveSelection(by offset: CGVector) {
+        guard var annotation = selectedAnnotation else { return }
+        annotation.translate(by: CGVector(dx: offset.dx / scaleX, dy: offset.dy / scaleY))
+        store.update(annotation)
+        needsDisplay = true
+    }
+
+    func reconcileSelection() {
+        if let selectedID, store.annotation(with: selectedID) == nil { self.selectedID = nil }
+    }
+
     private func runCropLoop(from startView: NSPoint) {
         guard let window else { return }
         let start = imagePoint(from: startView)
@@ -285,7 +365,22 @@ final class AnnotationCanvasView: NSView {
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if event.modifierFlags.contains(.command), key == "d" {
+            duplicateSelection()
+            return
+        }
+        if event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           let tool = AnnotationTool.allCases.first(where: { $0.shortcut == key }) {
+            self.tool = tool
+            return
+        }
+        let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
         switch event.keyCode {
+        case 123: moveSelection(by: CGVector(dx: -step, dy: 0))
+        case 124: moveSelection(by: CGVector(dx: step, dy: 0))
+        case 125: moveSelection(by: CGVector(dx: 0, dy: -step))
+        case 126: moveSelection(by: CGVector(dx: 0, dy: step))
         case 36, 76: // return / enter
             if tool == .crop { confirmCrop() } else { super.keyDown(with: event) }
         case 51, 117: // delete / forward delete
@@ -307,6 +402,7 @@ final class AnnotationCanvasView: NSView {
     }
 
     func deleteSelection() {
+        commitTextEditor()
         guard let selectedID else { return }
         store.remove(id: selectedID)
         self.selectedID = nil
@@ -316,7 +412,7 @@ final class AnnotationCanvasView: NSView {
     private func applyStyleToSelection() {
         guard let selectedID, var annotation = store.annotation(with: selectedID) else { return }
         annotation.style = style
-        store.update(annotation)
+        store.update(annotation, actionName: "Style Annotation")
     }
 
     var selectedAnnotation: Annotation? {
@@ -333,9 +429,10 @@ final class AnnotationCanvasView: NSView {
     /// annotation (undoable via the store); without one it becomes the style
     /// new annotations get on this pin. Never touches a global default.
     func updateSelectedStyle(_ mutate: (inout AnnotationStyle) -> Void) {
+        commitTextEditor()
         if let selectedID, var annotation = store.annotation(with: selectedID) {
             mutate(&annotation.style)
-            store.update(annotation)
+            store.update(annotation, actionName: "Style Annotation")
         } else {
             mutate(&style)
         }
@@ -409,7 +506,7 @@ final class AnnotationCanvasView: NSView {
         if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if existed { store.remove(id: annotation.id) }
         } else if existed {
-            store.update(annotation)
+            store.update(annotation, actionName: "Edit Text")
         } else {
             store.add(annotation)
             selectedID = annotation.id
@@ -422,6 +519,7 @@ final class AnnotationCanvasView: NSView {
 
     func cursor(at point: NSPoint) -> NSCursor {
         guard isActive else { return .openHand }
+        if let selected = selectedAnnotation, handleIndex(at: point, for: selected) != nil { return .crosshair }
         switch tool {
         case .select:
             return topmostAnnotation(at: imagePoint(from: point)) != nil ? .openHand : .arrow

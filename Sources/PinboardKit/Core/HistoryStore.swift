@@ -46,6 +46,7 @@ final class HistoryStore {
     let directory: URL
     private(set) var records: [HistoryRecord] = []
     var onChange: (() -> Void)?
+    var onReadError: ((Error) -> Void)?
 
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -113,8 +114,15 @@ final class HistoryStore {
         case .image:
             guard let data = try? Data(contentsOf: dir.appendingPathComponent("image.png")),
                   let image = NSImage(data: data) else { return nil }
-            let annotations = try? Data(contentsOf: dir.appendingPathComponent("annotations.json"))
-            return PinContentState(content: .image(image), annotationData: annotations)
+            do {
+                let annotations = record.hasAnnotations
+                    ? try Data(contentsOf: dir.appendingPathComponent("annotations.json")) : nil
+                return PinContentState(content: .image(image), annotationData: annotations)
+            } catch {
+                NSLog("Pinboard history payload could not be read: %@", error.localizedDescription)
+                onReadError?(error)
+                return nil
+            }
         }
     }
 

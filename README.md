@@ -18,12 +18,18 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
   long lists scroll while bulk controls remain visible. Closing a pin keeps
   its saved history. Click outside, press Escape or click the icon again to
   dismiss the panel. Pin Clipboard, History, Settings and Quit are at the bottom.
-- **Editable rich text** — click to type, select, undo/redo; fonts, colors,
+- **Quick actions** — new pins appear at the pointer, clamped to the screen.
+  Double-click an idle pin to copy its content and close it. Use the pencil or
+  context menu to edit; double-click within an active editor keeps its normal
+  selection behavior.
+- **Editable rich text** — use the pencil to type, select, undo/redo; fonts, colors,
   backgrounds and paragraph styles survive import, editing and copy-out.
-- **Three text modes** — Rich Text keeps everything above; Plain Text drops
-  formatting and shows the text in the default font (PingFang SC 14);
-  Markdown idles as a rendered document (headings, lists, tables, code,
-  links — and `![alt](url)` pictures) and edits as raw source. Switch
+- **Three text modes**, in order: **Rich Text Format**, **GitHub Flavored
+  Markdown**, **Plain Text**. Rich Text Format preserves formatting; GFM uses
+  cmark-gfm for headings, lists, aligned tables, task lists, strikethrough,
+  autolinks and images (including linked images), and edits as source. Plain
+  Text drops formatting and uses PingFang SC 14. See [GFM support](docs/GFM.md)
+  for the native renderer's compatibility boundaries. Switch
   globally under **Settings → Text**,
   or per pin via the window's context menu; a per-pin switch stops that
   window from following the global default.
@@ -32,7 +38,12 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
   preview under **Settings → Text**. The source you edit stays the same; a
   pin you switched to a transparent background keeps it.
 - **Image annotation** — rectangle, ellipse, arrow, line, freehand, text,
-  highlight, blur, mosaic and crop, all non-destructive and undoable.
+  numbered counters, highlight, blur, mosaic and crop, all non-destructive
+  and undoable. Single-key tools: V/R/O/A/L/P/T/N/H/B/M/C. Shift constrains
+  squares/circles and snaps lines/arrows to 45°. Drag corner or endpoint
+  handles to reshape; arrow keys nudge (Shift = 10 points), ⌘D duplicates,
+  Delete removes. A slider drag is one undo step. Interaction ideas follow
+  [Snapzy's annotation editor](https://github.com/duongductrong/Snapzy/blob/master/docs/ANNOTATE.md).
 - **Charts in pasted messages** — when a copied message ships its image only
   as an `<img>` reference (typical for Discord, Slack and web chat), the
   picture is fetched and shown inside the pin instead of an empty
@@ -102,7 +113,10 @@ All clipboard processing happens locally. The one exception is deliberate and
 narrow: when pasted content references its image only by URL (no image bytes on
 the clipboard; common for Discord, Slack and web chat) or when a Markdown pin
 contains `![alt](url)`, that single image is downloaded once so the pin can
-show it — nothing is ever uploaded, the request carries no cookies, and remote
-images are only fetched when the content actually needs them. Pin history is
+show it — nothing is ever uploaded and the request carries no cookies or URL
+credentials. HTTP(S) image connections reject local/private/reserved addresses
+at socket creation, including redirect destinations; downloads are limited to
+20 MiB each, four concurrent requests and 64 pending URLs. Local `file:` images
+and image `data:` URIs remain supported. Raw HTML in Markdown is shown literally. Pin history is
 stored under `~/Library/Application Support/Pinboard/History/` and can be
 cleared or bounded by retention in the History window / Settings.

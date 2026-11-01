@@ -102,13 +102,14 @@ final class MarkdownImageTests: XCTestCase {
                        "https://example.com/docs")
     }
 
-    /// Foundation's parser hides the image inside `[![alt](img)](target)` and
-    /// reports only the link, so such a badge keeps its alt text.
-    func testLinkedImagesFallBackToTheirAltText() {
+    func testLinkedImagesKeepBothImageAndLinkDestinations() {
         let rendered = MarkdownRenderer.render("[![badge](https://example.com/b.png)](https://example.com/target)")
 
-        XCTAssertEqual(rendered.string, "badge")
-        XCTAssertNil(rendered.attribute(DeferredImages.sourceAttribute, at: 0, effectiveRange: nil))
+        XCTAssertEqual(rendered.string, "\u{FFFC}")
+        XCTAssertEqual(rendered.attribute(DeferredImages.sourceAttribute, at: 0, effectiveRange: nil) as? String,
+                       "https://example.com/b.png")
+        XCTAssertEqual(rendered.attribute(.link, at: 0, effectiveRange: nil) as? String,
+                       "https://example.com/target")
     }
 
     // MARK: - Pins
@@ -243,28 +244,17 @@ final class MarkdownImageTests: XCTestCase {
 /// The loader's own behaviour: status handling, the size cap and the session
 /// cache that keeps a re-render from hitting the network twice.
 final class RemoteImageLoaderTests: XCTestCase {
-    private final class StubURLProtocol: URLProtocol {
-        static var requests: [URL] = []
-        static var statusCode = 200
-        static var payload: Data?
-
-        override class func canInit(with request: URLRequest) -> Bool { true }
-        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-        override func startLoading() {
-            guard let url = request.url else { return }
-            Self.requests.append(url)
-            let response = HTTPURLResponse(url: url, statusCode: Self.statusCode,
-                                           httpVersion: nil, headerFields: nil)!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            if let payload = Self.payload {
-                client?.urlProtocol(self, didLoad: payload)
-            }
-            client?.urlProtocolDidFinishLoading(self)
+    private final class Downloads {
+        var requests: [URL] = []
+        var fails = false
+        var payload = Data()
+        func download(_ url: URL, limit: Int) throws -> Data {
+            requests.append(url)
+            if fails { throw RemoteImageLoader.DownloadError(code: 22) }
+            return payload
         }
-
-        override func stopLoading() {}
     }
+    private var downloads: Downloads!
 
     private var loader: RemoteImageLoader!
     private var png: Data!
@@ -272,12 +262,9 @@ final class RemoteImageLoaderTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
         png = try XCTUnwrap(HTMLImageSourceTests.makePNG(width: 24, height: 12, color: .systemPink))
-        StubURLProtocol.requests = []
-        StubURLProtocol.statusCode = 200
-        StubURLProtocol.payload = png
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        loader = RemoteImageLoader(session: URLSession(configuration: configuration))
+        downloads = Downloads()
+        downloads.payload = png
+        loader = RemoteImageLoader(download: downloads.download)
     }
 
     private func fetch(_ url: URL) throws -> Data? {
@@ -298,16 +285,16 @@ final class RemoteImageLoaderTests: XCTestCase {
         let url = URL(string: "https://cdn.example.com/chart.png")!
         XCTAssertEqual(try fetch(url), png)
         XCTAssertEqual(try fetch(url), png)
-        XCTAssertEqual(StubURLProtocol.requests, [url], "the second fetch never left the app")
+        XCTAssertEqual(downloads.requests, [url], "the second fetch never left the app")
     }
 
     func testFailedStatusReturnsNil() throws {
-        StubURLProtocol.statusCode = 404
+        downloads.fails = true
         XCTAssertNil(try fetch(URL(string: "https://cdn.example.com/missing.png")!))
     }
 
     func testOversizedPayloadsAreDiscarded() throws {
-        let small = RemoteImageLoader(session: loader.session, maximumBytes: 4)
+        let small = RemoteImageLoader(maximumBytes: 4, download: downloads.download)
         var result: Data? = Data("sentinel".utf8)
         let expectation = expectation(description: "oversized")
         small.fetch(URL(string: "https://cdn.example.com/huge.png")!) {

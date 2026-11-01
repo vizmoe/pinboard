@@ -11,6 +11,7 @@ final class PinWindowManager {
     /// nil disables history (tests opt in with a temp-directory store).
     var historyStore: HistoryStore? {
         didSet {
+            historyStore?.onReadError = { [weak self] error in self?.onHistoryError?(error) }
             // A pin can exist before the store does: `pinboard://paste` at
             // launch delivers its URL event before `applicationDidFinishLaunching`
             // installs the store. Those pins get their record here.
@@ -38,11 +39,12 @@ final class PinWindowManager {
     // MARK: - Creation
 
     @discardableResult
-    func createPin(content: PinContent, annotationData: Data? = nil, textMode: TextContentMode? = nil) -> PinWindowController {
-        let controller = PinWindowController(content: content, annotationData: annotationData, textMode: textMode)
+    func createPin(content: PinContent, annotations: AnnotationStore.Payload? = nil,
+                   textMode: TextContentMode? = nil, at pointer: CGPoint = NSEvent.mouseLocation) -> PinWindowController {
+        let controller = PinWindowController(content: content, annotations: annotations, textMode: textMode)
         controller.manager = self
-        let screen = targetScreen()
-        let frame = controller.idealFrame(anchoredAt: nextAnchor(on: screen), on: screen)
+        let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
+        let frame = controller.idealFrame(anchoredAt: nextAnchor(on: screen, pointer: pointer), on: screen)
         controller.setFrame(frame)
         pins.append(controller)
         controller.present()
@@ -200,7 +202,13 @@ final class PinWindowManager {
         guard let entry = historyStore?.entry(id: recordID) else { return nil }
         // The record's stored mode wins: re-pinning reproduces how it looked,
         // and records written before text modes stay rich text.
-        return createPin(content: entry.content, annotationData: entry.annotationData, textMode: entry.textMode)
+        do {
+            let annotations = try entry.annotationData.map(AnnotationStore.decode)
+            return createPin(content: entry.content, annotations: annotations, textMode: entry.textMode)
+        } catch {
+            onHistoryError?(error)
+            return nil
+        }
     }
 
     /// Retention cleanup, throttled so directory scans stay rare.
@@ -219,15 +227,10 @@ final class PinWindowManager {
 
     // MARK: - Placement
 
-    private func targetScreen() -> NSScreen? { NSScreen.underMouse }
-
-    private func nextAnchor(on screen: NSScreen?) -> CGPoint {
+    private func nextAnchor(on screen: NSScreen?, pointer: CGPoint) -> CGPoint {
+        if Preferences.shared.placeNewWindowAtMouse { return pointer }
         let offset = CGFloat(cascadeStep % 8) * 22
         cascadeStep += 1
-        if Preferences.shared.placeNewWindowAtMouse {
-            let mouse = NSEvent.mouseLocation
-            return CGPoint(x: mouse.x + 12 + offset, y: mouse.y - 12 - offset)
-        }
         let visible = (screen ?? NSScreen.main)?.visibleFrame ?? .zero
         return CGPoint(x: visible.midX - 160 + offset, y: visible.midY + 120 - offset)
     }

@@ -106,7 +106,7 @@ final class ImagePinTests: XCTestCase {
 
         let snapshot = try JSONDecoder().decode(PinSnapshot.self, from: JSONEncoder().encode(pin.snapshot()))
         let restored = manager.createPin(content: try XCTUnwrap(snapshot.makeContent()),
-                                         annotationData: snapshot.annotationData)
+                                         annotations: try snapshot.annotationData.map(AnnotationStore.decode))
         let restoredView = try XCTUnwrap(restored.contentView as? ImagePinView)
 
         XCTAssertEqual(restoredView.baseImage.pixelSize, CGSize(width: 400, height: 300))

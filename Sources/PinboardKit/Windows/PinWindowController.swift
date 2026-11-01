@@ -29,7 +29,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// content's natural ratio. Can be switched on per pin from the menu.
     var isAspectLocked = false
 
-    init(content: PinContent, id: UUID = UUID(), annotationData: Data? = nil, textMode: TextContentMode? = nil) {
+    init(content: PinContent, id: UUID = UUID(), annotations: AnnotationStore.Payload? = nil, textMode: TextContentMode? = nil) {
         self.id = id
         self.kind = content.kind
         switch content {
@@ -40,7 +40,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
                                       mode: textMode ?? Preferences.shared.textMode,
                                       hasExplicitMode: textMode != nil)
         case .image(let image):
-            contentView = ImagePinView(image: image, annotationData: annotationData)
+            contentView = ImagePinView(image: image, annotations: annotations)
         }
         panel = PinPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200))
         super.init()
@@ -159,6 +159,18 @@ final class PinWindowController: NSObject, NSWindowDelegate {
 
     var isPinVisible: Bool { !isPinHidden && panel.isVisible }
 
+    /// Copy must succeed before the pin disappears, including pending edits.
+    @discardableResult
+    func copyAndClose(to pasteboard: NSPasteboard = .general) -> Bool {
+        endEditing()
+        guard contentView.copy(to: pasteboard) else {
+            Toast.show("Couldn't copy pin; it remains open", duration: 3)
+            return false
+        }
+        closePin()
+        return true
+    }
+
     func closePin() {
         endEditing()
         panel.delegate = nil
@@ -224,6 +236,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
             for item in contentView.contextMenuItems() { menu.addItem(item) }
             if !menu.items.isEmpty { menu.addItem(.separator()) }
             menu.addItem(actionItem("Copy Content") { [weak self] in self?.contentView.copyToPasteboard() })
+            menu.addItem(actionItem("Copy and Close Pin") { [weak self] in self?.copyAndClose() })
         }
         menu.addItem(actionItem(isAspectLocked ? "Unlock Aspect Ratio" : "Lock Aspect Ratio") { [weak self] in
             self?.isAspectLocked.toggle()
@@ -329,8 +342,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// Applies the Markdown theme's paper after a mode or theme change. A
     /// background the user chose for this pin wins.
     func applyThemeBackground() {
-        guard !hasExplicitBackground else { return }
-        applyBackground(visible: themedBackground != nil)
+        applyBackground(visible: hasExplicitBackground ? rootView.drawsBackground : themedBackground != nil)
     }
 
     private func applyBackground(visible: Bool) {

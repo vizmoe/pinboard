@@ -23,6 +23,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Pinboard" "$APP/Contents/MacOS/Pinboard"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Resources/ThirdPartyNotices.txt" "$APP/Contents/Resources/ThirdPartyNotices.txt"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 if [ -f "$ROOT/Resources/AppIcon.icns" ]; then

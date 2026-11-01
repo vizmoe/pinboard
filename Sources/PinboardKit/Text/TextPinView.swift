@@ -3,7 +3,7 @@ import AppKit
 /// Text pin. Rich text pins keep an `NSAttributedString` end to end so RTF
 /// attributes survive import, editing and copy-out untouched. Markdown pins
 /// keep the raw source as canonical content: while idle they show the rendered
-/// document, clicking them edits the source.
+/// document; the Edit action opens the source.
 final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     weak var pinController: PinWindowController?
 
@@ -599,19 +599,16 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     /// Rich text writes RTFD/RTF plus a plain text fallback, so formatting
     /// survives the round trip. Plain Text and Markdown pins carry no
     /// formatting, so they copy their source verbatim.
-    func copyToPasteboard() {
-        copy(to: .general)
-    }
-
     /// Writes to a specific pasteboard; tests use a private one so they never
     /// disturb the user's clipboard.
-    func copy(to pasteboard: NSPasteboard) {
+    @discardableResult
+    func copy(to pasteboard: NSPasteboard) -> Bool {
         pasteboard.clearContents()
         switch textMode {
         case .richText:
-            pasteboard.writeObjects([attributedString])
+            return pasteboard.writeObjects([attributedString])
         case .plainText, .markdown:
-            pasteboard.setString(attributedString.string, forType: .string)
+            return pasteboard.setString(attributedString.string, forType: .string)
         }
     }
 
@@ -631,7 +628,17 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
                            isToggled: isEditing)]
     }
 
-    func contextMenuItems() -> [NSMenuItem] { [] }
+    func contextMenuItems() -> [NSMenuItem] {
+        let item = NSMenuItem(title: isEditing ? "Done Editing" : "Edit Text…",
+                              action: #selector(MenuActionTarget.run(_:)), keyEquivalent: "")
+        let target = MenuActionTarget { [weak self] in
+            self?.toggleEditing()
+            self?.pinController?.refreshChrome()
+        }
+        item.target = target
+        item.representedObject = target
+        return [item]
+    }
 
     // MARK: - Helpers
 
@@ -735,14 +742,12 @@ final class PinTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         guard let window else { return super.mouseDown(with: event) }
+        if event.clickCount == 2, !isEditable {
+            pinView?.pinController?.copyAndClose()
+            return
+        }
         if event.modifierFlags.contains(.command) || !isEditable {
-            let point = convert(event.locationInWindow, from: nil)
-            WindowInteraction.move(window: window, dragCursor: .closedHand, endCursor: .openHand) { [weak self] in
-                guard let self else { return }
-                self.pinView?.beginEditing(at: point)
-                self.pinView?.pinController?.refreshChrome()
-                NSCursor.iBeam.set()
-            }
+            WindowInteraction.move(window: window, dragCursor: .closedHand, endCursor: .openHand)
             return
         }
         super.mouseDown(with: event)
@@ -761,6 +766,7 @@ final class PinTextView: NSTextView {
         let menu = super.menu(for: event) ?? NSMenu()
         guard let controller = pinView?.pinController else { return menu }
         menu.addItem(.separator())
+        if let pinView { pinView.contextMenuItems().forEach { menu.addItem($0) } }
         controller.appendPinItems(to: menu, includingContentItems: false)
         return menu
     }

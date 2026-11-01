@@ -29,13 +29,20 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Pins") {
+                Toggle("Place new pins at the pointer", isOn: $preferences.placeNewWindowAtMouse)
+                Text("Double-click a pin to copy and close it. Use the pencil or context menu to edit.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Text") {
                 Picker("Text mode", selection: $preferences.textMode) {
                     ForEach(TextContentMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
-                Text("Rich Text preserves fonts and colours. Plain Text drops formatting and uses the default font. Markdown renders headings, lists, quotes and code; click a pin to edit its source.")
+                Text("Rich Text Format preserves fonts and colours. GitHub Flavored Markdown renders tables, task lists, links and images; use the pencil to edit its source. Plain Text uses the default font.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
