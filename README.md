@@ -96,21 +96,22 @@ Notes:
 
 ## Installation
 
-Download a ZIP from [GitHub Releases](https://github.com/vizmoe/pinboard/releases):
-choose `arm64` for Apple Silicon or `x86_64` for Intel. Unzip it and move
-`Pinboard.app` to Applications. The minimum supported macOS version is defined
+Download a DMG from [GitHub Releases](https://github.com/vizmoe/pinboard/releases):
+choose `arm64` for Apple Silicon or `x86_64` for Intel. Open the disk image,
+drag `Pinboard.app` onto the **Applications** shortcut, then eject the image
+and open Pinboard from Applications. The minimum supported macOS version is defined
 in [Info.plist](Resources/Info.plist) (`LSMinimumSystemVersion`).
 
-Release builds are ad-hoc signed and are **not notarized**. If macOS blocks the
+The app inside each DMG is ad-hoc signed and is **not notarized**. If macOS blocks the
 first launch, follow Apple's [instructions for opening an app from an unidentified
 developer](https://support.apple.com/en-us/102445) in System Settings → Privacy &
 Security. Approve the app only if you trust the downloaded release.
 
-Each release includes `SHA256SUMS`. To verify one downloaded ZIP, keep both files
+Each release includes `SHA256SUMS`. To verify one downloaded DMG, keep both files
 in the same directory and check the matching entry, for example:
 
 ```bash
-grep 'macos-arm64.zip$' SHA256SUMS | shasum -a 256 -c -
+grep 'macos-arm64[.]dmg$' SHA256SUMS | shasum -a 256 -c -
 ```
 
 ## Building
@@ -129,7 +130,7 @@ If `xcode-select` points at CommandLineTools, prefix SwiftPM commands with
 ## Releasing
 
 The [release workflow](.github/workflows/release.yml) runs tests and verifies
-installable archives on both supported architectures for PRs and `main`.
+installable DMGs on both supported architectures for PRs and `main`.
 Only version tags publish a Release, after all checks pass.
 
 Update `CFBundleShortVersionString` and `CFBundleVersion` in
@@ -149,7 +150,7 @@ Use a fresh version for each release. Tags must have the form `vMAJOR.MINOR.PATC
 and match the bundle version. Failed runs can resume an unpublished draft;
 the workflow refuses to overwrite a published release.
 
-To build and verify a release archive for the current Mac locally:
+To build and verify a release DMG for the current Mac locally:
 
 ```bash
 ./scripts/package-release.sh
@@ -157,7 +158,10 @@ VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resourc
 ./Tests/ReleasePackagingTests.sh "v$VERSION" "$(uname -m)"
 ```
 
-Archives and checksums are written to the ignored `dist/` directory.
+DMGs and checksums are written to the ignored `dist/` directory. Verification
+mounts each image read-only, checks the Applications shortcut, and copies the
+app to a temporary directory to validate installation without replacing an
+existing app. Test volumes are detached when verification exits.
 
 ## Data & Privacy
 

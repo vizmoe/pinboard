@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build a native release archive, or validate a tag without building.
+# Build a native release DMG, or validate a tag without building.
 # Usage: ./scripts/package-release.sh [--validate-only] [vMAJOR.MINOR.PATCH]
 set -euo pipefail
 
@@ -39,10 +39,14 @@ APP="$ROOT/.build/Pinboard.app"
 codesign --verify --deep --strict "$APP"
 test "$(lipo -archs "$APP/Contents/MacOS/Pinboard")" = "$ARCH"
 
-NAME="Pinboard-$VERSION-macos-$ARCH.zip"
+NAME="Pinboard-$VERSION-macos-$ARCH.dmg"
 STAGING="$(mktemp -d "$ROOT/.build/release.XXXXXX")"
 trap 'rm -rf "$STAGING"' EXIT
-ditto -c -k --keepParent --norsrc --noextattr "$APP" "$STAGING/$NAME"
+mkdir -p "$STAGING/volume"
+ditto --norsrc --noextattr "$APP" "$STAGING/volume/Pinboard.app"
+ln -s /Applications "$STAGING/volume/Applications"
+hdiutil create -srcfolder "$STAGING/volume" -volname "Pinboard $VERSION" \
+    -fs HFS+ -format UDZO "$STAGING/$NAME"
 (cd "$STAGING" && shasum -a 256 "$NAME" > "$NAME.sha256")
 mkdir -p "$ROOT/dist"
 mv "$STAGING/$NAME" "$STAGING/$NAME.sha256" "$ROOT/dist/"
