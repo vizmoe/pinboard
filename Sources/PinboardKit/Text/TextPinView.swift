@@ -34,12 +34,15 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     var minimumPinSize: CGSize { CGSize(width: 140, height: 56) }
 
-    var previewTitle: String {
+    var previewTitle: String { menuSummary(attachmentText: "Image") ?? "Empty Text" }
+    var menuPreviewText: String? { menuSummary(attachmentText: "") }
+
+    private func menuSummary(attachmentText: String) -> String? {
         let text = textView.string
         let prefix = text.prefix(240)
-        let summary = prefix.replacingOccurrences(of: "\u{FFFC}", with: "Image")
+        let summary = prefix.replacingOccurrences(of: "\u{FFFC}", with: attachmentText)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !summary.isEmpty else { return "Empty Text" }
+        guard !summary.isEmpty else { return nil }
         let truncated = summary.count > 60 || prefix.endIndex != text.endIndex
         return String(summary.prefix(60)) + (truncated ? "…" : "")
     }

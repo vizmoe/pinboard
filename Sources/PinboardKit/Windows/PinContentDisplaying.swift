@@ -11,6 +11,8 @@ protocol PinContentDisplaying: NSView {
 
     /// Read-only menu presentation; must not commit edits or encode payloads.
     var previewTitle: String { get }
+    /// Actual text only; semantic fallback names belong in accessibility/help.
+    var menuPreviewText: String? { get }
     func menuPreview(fitting maxSize: CGSize) -> NSImage?
 
     func idealSize(fitting maxSize: CGSize) -> CGSize
@@ -43,6 +45,7 @@ extension PinContentDisplaying {
     func captureState() -> PinContentState { PinContentState(content: currentContent()) }
     var contentAspectRatio: CGSize? { nil }
     var minimumPinSize: CGSize { CGSize(width: 120, height: 60) }
+    var menuPreviewText: String? { nil }
     func endEditing() {}
     func cursor(at point: NSPoint) -> NSCursor { .openHand }
     var pinUndoManager: UndoManager? { nil }

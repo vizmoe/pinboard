@@ -84,8 +84,8 @@ final class PinInteractionTests: XCTestCase {
         let panel = controller.pinsViewController
         panel.reloadPins()
         XCTAssertEqual(panel.rows.count, 2)
-        XCTAssertEqual(panel.rows[0].visibilityLabel.stringValue, "Visible")
-        XCTAssertEqual(panel.rows[1].visibilityLabel.stringValue, "Hidden")
+        XCTAssertTrue(panel.rows[0].accessibilityLabel()?.contains("Visible") == true)
+        XCTAssertTrue(panel.rows[1].accessibilityLabel()?.contains("Hidden") == true)
         panel.rows[1].closeButton.performClick(nil)
         XCTAssertTrue(manager.pin(with: first.id) === first)
         XCTAssertNil(manager.pin(with: second.id))

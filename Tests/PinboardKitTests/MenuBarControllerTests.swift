@@ -41,25 +41,21 @@ final class MenuBarControllerTests: XCTestCase {
     func testEmptyStateDisablesBulkActionsWithoutRemovingUtilityButtons() throws {
         panel.reloadPins()
         XCTAssertTrue(panel.rows.isEmpty)
-        XCTAssertTrue(descendants(panel.view).contains { ($0 as? NSTextField)?.stringValue == "No Pins" && !$0.isHiddenOrHasHiddenAncestor })
+        XCTAssertFalse(descendants(panel.view).contains { $0 is NSTextField && !$0.isHiddenOrHasHiddenAncestor })
         for title in ["Show All", "Hide All", "Close All"] { XCTAssertFalse(try button(title).isEnabled) }
         for title in ["Pin Clipboard", "History", "Settings", "Quit"] { XCTAssertTrue(try button(title).isEnabled) }
     }
 
-    func testPinsHeadingPrecedesBulkActionsAndNoToggleOrShortcutHintsRemain() throws {
+    func testActionsShareOneIconStripWithoutShortcutHints() throws {
         panel.reloadPins()
         panel.view.layoutSubtreeIfNeeded()
-        let labels = descendants(panel.view).compactMap { ($0 as? NSTextField)?.stringValue }
-        XCTAssertTrue(labels.contains("Pins"))
-        XCTAssertFalse(labels.contains("Current Pins"))
         let buttons = descendants(panel.view).compactMap { $0 as? NSButton }
-        XCTAssertFalse(buttons.contains { $0.title.contains("Toggle") })
-        XCTAssertTrue(buttons.allSatisfy { $0.keyEquivalent.isEmpty })
-        let heading = try XCTUnwrap(descendants(panel.view).first { ($0 as? NSTextField)?.stringValue == "Pins" })
-        let headingRect = heading.convert(heading.bounds, to: panel.view)
-        for title in ["Show All", "Hide All", "Close All"] {
+        XCTAssertTrue(buttons.allSatisfy { $0.title.isEmpty && $0.keyEquivalent.isEmpty })
+        let navigation = try button("Pins")
+        let y = navigation.convert(navigation.bounds, to: panel.view).midY
+        for title in ["Show All", "Hide All", "Close All", "Settings", "Quit"] {
             let control = try button(title)
-            XCTAssertGreaterThan(control.convert(control.bounds, to: panel.view).minY, headingRect.maxY)
+            XCTAssertEqual(control.convert(control.bounds, to: panel.view).midY, y, accuracy: 1)
         }
     }
 
@@ -70,7 +66,8 @@ final class MenuBarControllerTests: XCTestCase {
         panel.reloadPins()
         XCTAssertEqual(panel.rows.map(\.pinID), [first.id, second.id])
         XCTAssertEqual(panel.rows[0].titleLabel.stringValue, "Meeting notes ship the panel")
-        XCTAssertEqual(panel.rows.map { $0.visibilityLabel.stringValue }, ["Visible", "Hidden"])
+        XCTAssertTrue(panel.rows[0].accessibilityLabel()?.contains("Visible") == true)
+        XCTAssertTrue(panel.rows[1].accessibilityLabel()?.contains("Hidden") == true)
         XCTAssertTrue(panel.rows[0].hideButton.isEnabled)
         XCTAssertFalse(panel.rows[1].hideButton.isEnabled)
         let thumbnail = try bitmap(XCTUnwrap(panel.rows[1].previewView.image))
@@ -91,7 +88,7 @@ final class MenuBarControllerTests: XCTestCase {
         row.showButton.performClick(nil)
         XCTAssertFalse(first.isPinVisible)
         XCTAssertTrue(second.isPinVisible)
-        XCTAssertEqual(panel.rows[1].visibilityLabel.stringValue, "Visible")
+        XCTAssertTrue(panel.rows[1].accessibilityLabel()?.contains("Visible") == true)
         XCTAssertTrue(panel.rows[1] === row)
         row.hideButton.performClick(nil)
         XCTAssertFalse(second.isPinVisible)
@@ -158,7 +155,7 @@ final class MenuBarControllerTests: XCTestCase {
         XCTAssertEqual(panel.rows.count, 2)
         XCTAssertTrue(panel.rows[0] === row)
         XCTAssertEqual(row.titleLabel.stringValue, "after")
-        XCTAssertEqual(row.visibilityLabel.stringValue, "Hidden")
+        XCTAssertTrue(row.accessibilityLabel()?.contains("Hidden") == true)
         pin.closePin()
         panel.reloadPins()
         XCTAssertEqual(panel.rows.count, 1)
@@ -193,7 +190,7 @@ final class MenuBarControllerTests: XCTestCase {
         panel.rows[4].hideButton.performClick(nil)
         XCTAssertEqual(panel.scrollView.contentView.bounds.origin.y, 240, accuracy: 1)
         XCTAssertEqual(bulk.convert(bulk.bounds, to: panel.view), before)
-        XCTAssertEqual(panel.rows[4].visibilityLabel.stringValue, "Hidden")
+        XCTAssertTrue(panel.rows[4].accessibilityLabel()?.contains("Hidden") == true)
     }
 
     func testLongUnicodeAndEmptyTextHaveBoundedReadableTitles() {
@@ -202,7 +199,8 @@ final class MenuBarControllerTests: XCTestCase {
         panel.reloadPins()
         XCTAssertLessThan(panel.rows[0].titleLabel.stringValue.count, 100)
         XCTAssertTrue(panel.rows[0].titleLabel.stringValue.contains("…"))
-        XCTAssertEqual(panel.rows[1].titleLabel.stringValue, "Empty Text")
+        XCTAssertTrue(panel.rows[1].titleLabel.isHidden)
+        XCTAssertTrue(panel.rows[1].showButton.accessibilityLabel()?.contains("Empty Text") == true)
     }
 
     func testTextPreviewReadsLiveEditsWithoutChangingTheEditor() throws {

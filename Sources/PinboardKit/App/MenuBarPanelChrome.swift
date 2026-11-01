@@ -14,13 +14,13 @@ final class PanelIconButton: NSButton {
          target: AnyObject? = nil, action: Selector? = nil) {
         actionName = name
         self.keepsSelection = keepsSelection
-        super.init(frame: NSRect(x: 0, y: 0, width: 32, height: 32))
+        super.init(frame: NSRect(x: 0, y: 0, width: 26, height: 26))
         title = ""
         identifier = NSUserInterfaceItemIdentifier(name)
         toolTip = name
         setAccessibilityLabel(name)
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
         imagePosition = .imageOnly
         imageScaling = .scaleProportionallyDown
         isBordered = false
@@ -32,7 +32,7 @@ final class PanelIconButton: NSButton {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-    override var intrinsicContentSize: NSSize { NSSize(width: 32, height: 32) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 26, height: 26) }
     override var state: NSControl.StateValue { didSet { needsDisplay = true } }
     override var isEnabled: Bool { didSet { needsDisplay = true } }
 
@@ -62,7 +62,7 @@ final class PanelIconButton: NSButton {
                 : selected ? .controlAccentColor.withAlphaComponent(0.14)
                 : .labelColor.withAlphaComponent(isHighlighted ? 0.12 : 0.07)
             color.withAlphaComponent(isEnabled ? color.alphaComponent : 0.25).setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 8, yRadius: 8).fill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6).fill()
         }
         contentTintColor = isProminent ? .white : isDestructive ? .systemRed
             : selected ? .controlAccentColor : .secondaryLabelColor
@@ -70,69 +70,60 @@ final class PanelIconButton: NSButton {
     }
 }
 
-final class MenuBarPanelHeader: NSView {
-    let titleLabel: NSTextField
+/// One fixed strip for navigation, contextual actions and app utilities.
+final class MenuBarPanelToolbar: NSView {
     let pinsButton = PanelIconButton("Pins", symbol: "pin.fill", keepsSelection: true)
     let historyButton = PanelIconButton("History", symbol: "clock.arrow.circlepath", keepsSelection: true)
     let pasteButton = PanelIconButton("Pin Clipboard", symbol: "plus")
+    let settingsButton = PanelIconButton("Settings", symbol: "gearshape")
+    let quitButton = PanelIconButton("Quit", symbol: "power")
+    private var actions: [NSButton] = []
     var onPins: (() -> Void)?
     var onHistory: (() -> Void)?
     var onPaste: (() -> Void)?
-
-    init(title: String, showingHistory: Bool) {
-        titleLabel = NSTextField(labelWithString: title)
-        super.init(frame: .zero)
-        titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        pinsButton.state = showingHistory ? .off : .on
-        historyButton.state = showingHistory ? .on : .off
-        pasteButton.isProminent = true
-        for (button, action) in [(pinsButton, #selector(pins)), (historyButton, #selector(history)), (pasteButton, #selector(paste))] {
-            button.target = self
-            button.action = action
-        }
-        [titleLabel, pinsButton, historyButton, pasteButton].forEach { addSubview($0) }
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-    override var isFlipped: Bool { true }
-    override func layout() {
-        super.layout()
-        titleLabel.frame = NSRect(x: 0, y: 5, width: max(0, bounds.width - 140), height: 24)
-        pinsButton.frame = NSRect(x: bounds.width - 116, y: 0, width: 32, height: 32)
-        historyButton.frame = NSRect(x: bounds.width - 80, y: 0, width: 32, height: 32)
-        pasteButton.frame = NSRect(x: bounds.width - 32, y: 0, width: 32, height: 32)
-    }
-    @objc private func pins() { pinsButton.state = .on; onPins?() }
-    @objc private func history() { historyButton.state = .on; onHistory?() }
-    @objc private func paste() { onPaste?() }
-}
-
-final class MenuBarPanelFooter: NSView {
-    private let label = NSTextField(labelWithString: "Pinboard")
-    let settingsButton = PanelIconButton("Settings", symbol: "gearshape")
-    let quitButton = PanelIconButton("Quit", symbol: "power")
     var onSettings: (() -> Void)?
     var onQuit: (() -> Void)?
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        label.font = .systemFont(ofSize: 11, weight: .medium)
-        label.textColor = .tertiaryLabelColor
-        settingsButton.target = self
-        settingsButton.action = #selector(settings)
-        quitButton.target = self
-        quitButton.action = #selector(quit)
-        [label, settingsButton, quitButton].forEach { addSubview($0) }
+    init(showingHistory: Bool) {
+        super.init(frame: .zero)
+        pinsButton.state = showingHistory ? .off : .on
+        historyButton.state = showingHistory ? .on : .off
+        pasteButton.isProminent = true
+        for (button, action) in [(pinsButton, #selector(pins)), (historyButton, #selector(history)),
+                                  (pasteButton, #selector(paste)), (settingsButton, #selector(settings)),
+                                  (quitButton, #selector(quit))] {
+            button.target = self
+            button.action = action
+            addSubview(button)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
     override var isFlipped: Bool { true }
+
+    func setActions(_ buttons: [NSButton]) {
+        guard actions != buttons else { return }
+        actions.forEach { $0.removeFromSuperview() }
+        actions = buttons
+        buttons.forEach { addSubview($0) }
+        needsLayout = true
+    }
+
     override func layout() {
         super.layout()
-        label.frame = NSRect(x: 0, y: 9, width: 100, height: 16)
-        settingsButton.frame = NSRect(x: bounds.width - 72, y: 0, width: 32, height: 32)
-        quitButton.frame = NSRect(x: bounds.width - 32, y: 0, width: 32, height: 32)
+        pinsButton.frame = NSRect(x: 0, y: 0, width: 26, height: 26)
+        historyButton.frame = NSRect(x: 28, y: 0, width: 26, height: 26)
+        pasteButton.frame = NSRect(x: 64, y: 0, width: 26, height: 26)
+        for (index, button) in actions.enumerated() {
+            button.frame = NSRect(x: 108 + CGFloat(index) * 28, y: 0, width: 26, height: 26)
+        }
+        settingsButton.frame = NSRect(x: bounds.width - 56, y: 0, width: 26, height: 26)
+        quitButton.frame = NSRect(x: bounds.width - 26, y: 0, width: 26, height: 26)
     }
+
+    @objc private func pins() { pinsButton.state = .on; onPins?() }
+    @objc private func history() { historyButton.state = .on; onHistory?() }
+    @objc private func paste() { onPaste?() }
     @objc private func settings() { onSettings?() }
     @objc private func quit() { onQuit?() }
 }

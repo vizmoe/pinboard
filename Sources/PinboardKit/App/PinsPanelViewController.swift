@@ -11,20 +11,15 @@ final class PinsPanelViewController: NSViewController {
     var onDismiss: (() -> Void)?
     private(set) var rows: [PinRowView] = []
     let scrollView = NSScrollView()
-    let countLabel = NSTextField(labelWithString: "")
     private let document = FlippedView()
-    private let emptyView = NSStackView()
-    private let header = MenuBarPanelHeader(title: "Pins", showingHistory: false)
-    private let bulk = NSStackView()
-    private let separator = NSBox()
-    private let footer = MenuBarPanelFooter()
-    private var listHeight: CGFloat = 136
+    private let toolbar = MenuBarPanelToolbar(showingHistory: false)
+    private var listHeight: CGFloat = 0
     private var showAllButton: NSButton!
     private var hideAllButton: NSButton!
     private var closeAllButton: NSButton!
-    private static let width: CGFloat = 380
-    private static let rowHeight: CGFloat = 88
-    private static let rowSpacing: CGFloat = 8
+    private static let width: CGFloat = 320
+    private static let rowHeight: CGFloat = 60
+    private static let rowSpacing: CGFloat = 4
 
     init(manager: PinWindowManager) {
         self.manager = manager
@@ -34,25 +29,21 @@ final class PinsPanelViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     override func loadView() {
-        let root = MenuBarPanelRootView(frame: NSRect(x: 0, y: 0, width: Self.width, height: 283))
+        let root = MenuBarPanelRootView(frame: NSRect(x: 0, y: 0, width: Self.width, height: 46))
         root.wantsLayer = true
         root.onLayout = { [weak self] in self?.layoutContent() }
         root.onDismiss = { [weak self] in self?.onDismiss?() }
         view = root
-        countLabel.font = .systemFont(ofSize: 11)
-        countLabel.textColor = .secondaryLabelColor
-        header.onPins = { [weak self] in self?.reloadPins() }
-        header.onHistory = { [weak self] in self?.onUtilityAction?(.history) }
-        header.onPaste = { [weak self] in self?.onUtilityAction?(.paste) }
-        footer.onSettings = { [weak self] in self?.onUtilityAction?(.settings) }
-        footer.onQuit = { [weak self] in self?.onUtilityAction?(.quit) }
+        toolbar.onPins = { [weak self] in self?.reloadPins() }
+        toolbar.onHistory = { [weak self] in self?.onUtilityAction?(.history) }
+        toolbar.onPaste = { [weak self] in self?.onUtilityAction?(.paste) }
+        toolbar.onSettings = { [weak self] in self?.onUtilityAction?(.settings) }
+        toolbar.onQuit = { [weak self] in self?.onUtilityAction?(.quit) }
 
         showAllButton = button("Show All", symbol: "eye", action: #selector(showAll))
         hideAllButton = button("Hide All", symbol: "eye.slash", action: #selector(hideAll))
         closeAllButton = button("Close All", symbol: "xmark", action: #selector(closeAll))
-        [showAllButton, hideAllButton, closeAllButton].forEach { bulk.addArrangedSubview($0!) }
-        bulk.spacing = 4
-        bulk.distribution = .fillEqually
+        toolbar.setActions([showAllButton, hideAllButton, closeAllButton])
 
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
@@ -62,35 +53,14 @@ final class PinsPanelViewController: NSViewController {
         scrollView.documentView = document
         scrollView.setAccessibilityLabel("Current pins")
 
-        emptyView.orientation = .vertical
-        emptyView.spacing = 8
-        let emptyIcon = NSImageView()
-        emptyIcon.image = NSImage(systemSymbolName: "pin", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 28, weight: .light))
-        emptyIcon.contentTintColor = .tertiaryLabelColor
-        emptyView.addArrangedSubview(emptyIcon)
-        let emptyTitle = NSTextField(labelWithString: "No Pins")
-        emptyTitle.font = .systemFont(ofSize: 15, weight: .medium)
-        let emptyHint = NSTextField(labelWithString: "Pin something from your clipboard.")
-        emptyHint.font = .systemFont(ofSize: 12)
-        emptyHint.textColor = .secondaryLabelColor
-        emptyView.addArrangedSubview(emptyTitle)
-        emptyView.addArrangedSubview(emptyHint)
-
-        separator.boxType = .separator
-        for child in [header, countLabel, bulk, scrollView, emptyView, separator, footer] { root.addSubview(child) }
+        [toolbar, scrollView].forEach { root.addSubview($0) }
         root.onAppearanceChange = { [weak self] in self?.reloadPins() }
     }
 
     private func layoutContent() {
         let width = view.bounds.width
-        header.frame = NSRect(x: 16, y: 14, width: width - 32, height: 32)
-        countLabel.frame = NSRect(x: 16, y: 63, width: width - 148, height: 18)
-        bulk.frame = NSRect(x: width - 116, y: 54, width: 100, height: 32)
-        scrollView.frame = NSRect(x: 12, y: 96, width: width - 24, height: listHeight)
-        emptyView.frame = NSRect(x: 16, y: 96 + (listHeight - 92) / 2, width: width - 32, height: 92)
-        separator.frame = NSRect(x: 16, y: 108 + listHeight, width: width - 32, height: 1)
-        footer.frame = NSRect(x: 16, y: 117 + listHeight, width: width - 32, height: 32)
+        toolbar.frame = NSRect(x: 10, y: 10, width: width - 20, height: 26)
+        scrollView.frame = NSRect(x: 8, y: 46, width: width - 16, height: listHeight)
         let height = CGFloat(rows.count) * (Self.rowHeight + Self.rowSpacing) - (rows.isEmpty ? 0 : Self.rowSpacing)
         document.setFrameSize(NSSize(width: scrollView.contentSize.width, height: max(height, listHeight)))
         for (index, row) in rows.enumerated() {
@@ -122,19 +92,18 @@ final class PinsPanelViewController: NSViewController {
             view.effectiveAppearance.performAsCurrentDrawingAppearance { row.update(from: pin) }
             return row
         }
-        header.pinsButton.state = .on
-        header.historyButton.state = .off
+        toolbar.pinsButton.state = .on
+        toolbar.historyButton.state = .off
         let count = manager.count
-        countLabel.stringValue = "\(count) total · \(manager.visibleCount) visible"
+        view.setAccessibilityLabel("Pins: \(count) total, \(manager.visibleCount) visible")
         showAllButton.isEnabled = count > 0
         hideAllButton.isEnabled = manager.visibleCount > 0
         closeAllButton.isEnabled = count > 0
-        emptyView.isHidden = count > 0
         scrollView.isHidden = count == 0
 
         let height = CGFloat(count) * (Self.rowHeight + Self.rowSpacing) - (count > 0 ? Self.rowSpacing : 0)
-        listHeight = min(max(height, 144), 376)
-        let size = NSSize(width: Self.width, height: listHeight + 159)
+        listHeight = min(height, 316)
+        let size = NSSize(width: Self.width, height: 46 + listHeight + (count > 0 ? 8 : 0))
         preferredContentSize = size
         // AppKit sizes an attached page from preferredContentSize. Setting its
         // frame here turns the old height difference into an autoresizing margin
@@ -176,7 +145,6 @@ final class PinRowView: NSView {
     let pinID: UUID
     let previewView = NSImageView()
     let titleLabel = NSTextField(wrappingLabelWithString: "")
-    let visibilityLabel = NSTextField(labelWithString: "")
     let showButton = PanelIconButton("Show", symbol: "eye")
     let hideButton = PanelIconButton("Hide", symbol: "eye.slash")
     let closeButton = PanelIconButton("Close", symbol: "xmark")
@@ -185,65 +153,59 @@ final class PinRowView: NSView {
     init(pinID: UUID, onAction: @escaping (PinsPanelViewController.PinAction, UUID) -> Void) {
         self.pinID = pinID
         self.onAction = onAction
-        super.init(frame: NSRect(x: 0, y: 0, width: 356, height: 88))
+        super.init(frame: NSRect(x: 0, y: 0, width: 304, height: 60))
         wantsLayer = true
-        layer?.cornerRadius = 9
+        layer?.cornerRadius = 7
         previewView.imageScaling = .scaleProportionallyUpOrDown
         previewView.wantsLayer = true
-        previewView.layer?.cornerRadius = 5
+        previewView.layer?.cornerRadius = 4
         previewView.layer?.masksToBounds = true
-        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.font = .systemFont(ofSize: 12)
         titleLabel.maximumNumberOfLines = 2
         titleLabel.lineBreakMode = .byTruncatingTail
-        visibilityLabel.font = .systemFont(ofSize: 11)
-        visibilityLabel.textColor = .secondaryLabelColor
         for (button, selector) in [(showButton, #selector(show)), (hideButton, #selector(hide)), (closeButton, #selector(close))] {
             button.target = self
             button.action = selector
         }
-        let actions = NSStackView(views: [showButton, hideButton, closeButton])
-        actions.spacing = 0
-        actions.distribution = .fillEqually
-        for child in [previewView, titleLabel, visibilityLabel, actions] {
-            child.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(child)
-        }
-        NSLayoutConstraint.activate([
-            previewView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            previewView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            previewView.widthAnchor.constraint(equalToConstant: 72),
-            previewView.heightAnchor.constraint(equalToConstant: 64),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            titleLabel.leadingAnchor.constraint(equalTo: previewView.trailingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            visibilityLabel.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
-            visibilityLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            actions.widthAnchor.constraint(equalToConstant: 96),
-            actions.heightAnchor.constraint(equalToConstant: 32),
-            actions.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
-            actions.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4)
-        ])
+        [previewView, titleLabel, showButton, hideButton, closeButton].forEach { addSubview($0) }
         setAccessibilityElement(false)
         setAccessibilityRole(.group)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-
+    override var isFlipped: Bool { true }
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() { layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.04).cgColor }
 
+    override func layout() {
+        super.layout()
+        let actionsX = bounds.width - 86
+        previewView.frame = NSRect(x: 8, y: 8, width: titleLabel.isHidden ? actionsX - 16 : 52, height: 44)
+        titleLabel.frame = NSRect(x: 68, y: 12, width: max(0, actionsX - 76), height: 36)
+        for (index, button) in [showButton, hideButton, closeButton].enumerated() {
+            button.frame = NSRect(x: actionsX + CGFloat(index) * 26, y: 17, width: 26, height: 26)
+        }
+    }
+
     func update(from pin: PinWindowController) {
         let title = pin.contentView.previewTitle
-        titleLabel.stringValue = title
-        titleLabel.toolTip = title
-        visibilityLabel.stringValue = pin.isPinVisible ? "Visible" : "Hidden"
+        let text = pin.contentView.menuPreviewText
+        titleLabel.stringValue = text ?? ""
+        titleLabel.toolTip = text
+        titleLabel.isHidden = text == nil
+        let visibility = pin.isPinVisible ? "Visible" : "Hidden"
+        setAccessibilityLabel("\(title), \(visibility)")
+        toolTip = "\(title) · \(visibility)"
         hideButton.isEnabled = pin.isPinVisible
+        previewView.alphaValue = pin.isPinVisible ? 1 : 0.5
+        titleLabel.alphaValue = previewView.alphaValue
         previewView.image = pin.contentView.menuPreview(fitting: CGSize(width: 248, height: 176))
         previewView.setAccessibilityLabel("Preview of \(title)")
         for button in [showButton, hideButton, closeButton] {
             button.setAccessibilityLabel("\(button.actionName) Pin: \(title)")
             button.toolTip = "\(button.actionName) Pin"
         }
+        needsLayout = true
     }
 
     @objc private func show() { onAction(.show, pinID) }
