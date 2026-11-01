@@ -44,8 +44,9 @@ library so it can be unit tested (`@testable import PinboardKit`).
   (Carbon `RegisterEventHotKey`; default `⌃⌥⇧⌘P`, persisted in `Preferences`)
 - `Core` — `PinContent`, `PinSnapshot`, `Preferences`, `HistoryStore`,
   `TextContentMode`
-- `History` — `HistoryView`/`HistoryWindowController` (search, Pin Again, Copy,
-  Delete, Clear; list keeps `updatedAt`-desc records)
+- `History` — `HistoryPanelViewController`/`HistoryViewModel` inside the status
+  popover (search, preview, Pin Again, Copy, Delete, confirmed Clear; list keeps
+  `updatedAt`-desc records). Clear preserves records associated with open pins.
 - `Clipboard` — pasteboard resolution (RTFD > RTF > image > HTML > plain),
   `HTMLImages` (parses `<img src>` out of pasted HTML), `RemoteImageLoader`
   (fetches remote images off the main thread; session cache)

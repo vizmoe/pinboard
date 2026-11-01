@@ -34,7 +34,7 @@ final class PinsPanelViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     override func loadView() {
-        let root = PinsPanelRootView(frame: NSRect(x: 0, y: 0, width: Self.width, height: 283))
+        let root = MenuBarPanelRootView(frame: NSRect(x: 0, y: 0, width: Self.width, height: 283))
         root.wantsLayer = true
         root.onLayout = { [weak self] in self?.layoutContent() }
         root.onDismiss = { [weak self] in self?.onDismiss?() }
@@ -181,7 +181,7 @@ final class PinsPanelViewController: NSViewController {
     @objc private func quit() { onUtilityAction?(.quit) }
 }
 
-private final class PinsPanelRootView: NSView {
+final class MenuBarPanelRootView: NSView {
     var onLayout: (() -> Void)?
     var onDismiss: (() -> Void)?
     override var isFlipped: Bool { true }

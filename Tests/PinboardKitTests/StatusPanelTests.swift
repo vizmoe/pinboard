@@ -93,20 +93,20 @@ final class StatusPanelTests: XCTestCase {
         XCTAssertEqual(controller.pinsViewController.rows.first?.titleLabel.stringValue, "new")
     }
 
-    func testSettingsAndHistoryDismissPanelAndInvokeTheirCallbacks() throws {
+    func testHistoryStaysInTheSamePopoverAndSettingsDismissesIt() throws {
         controller.popover.close()
         manager.onChange = nil
         var settings = 0
-        var history = 0
         controller = MenuBarController(manager: manager, onOpenSettings: { settings += 1 })
-        controller.onOpenHistory = { history += 1 }
         anchor.target = controller
         anchor.performClick(nil)
+        let window = controller.pinsViewController.view.window
         try XCTUnwrap(buttons(in: controller.pinsViewController.view).first { $0.title == "History" }).performClick(nil)
-        XCTAssertEqual(history, 1)
-        XCTAssertFalse(controller.popover.isShown)
-        anchor.performClick(nil)
-        try XCTUnwrap(buttons(in: controller.pinsViewController.view).first { $0.title == "Settings" }).performClick(nil)
+        XCTAssertTrue(controller.popover.isShown)
+        let history = try XCTUnwrap(controller.popover.contentViewController)
+        XCTAssertFalse(history === controller.pinsViewController)
+        XCTAssertTrue(history.view.window === window)
+        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Settings" }).performClick(nil)
         XCTAssertEqual(settings, 1)
         XCTAssertFalse(controller.popover.isShown)
     }
@@ -121,6 +121,40 @@ final class StatusPanelTests: XCTestCase {
             charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
         window.sendEvent(escape)
         XCTAssertFalse(controller.popover.isShown)
+    }
+
+    func testHistoryActionsAndReturnUseOnePopoverWindow() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer {
+            manager.closeAll()
+            manager.historyStore = nil
+            pasteboard.releaseGlobally()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let store = HistoryStore(directory: directory)
+        manager.historyStore = store
+        let id = try store.upsert(content: .text(NSAttributedString(string: "Saved note")), textMode: .plainText)
+        controller = MenuBarController(manager: manager, historyPasteboard: pasteboard, onOpenSettings: {})
+        anchor.target = controller
+        anchor.performClick(nil)
+        let window = controller.pinsViewController.view.window
+        try XCTUnwrap(buttons(in: controller.pinsViewController.view).first { $0.title == "History" }).performClick(nil)
+        let history = try XCTUnwrap(controller.historyViewController)
+        history.tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        XCTAssertEqual(history.model?.selection, id)
+        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Copy" }).performClick(nil)
+        XCTAssertEqual(pasteboard.string(forType: .string), "Saved note")
+        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Pin Again" }).performClick(nil)
+        flushUpdates()
+        XCTAssertTrue(controller.popover.isShown)
+        XCTAssertTrue(history.view.window === window)
+        XCTAssertEqual(manager.count, 1)
+        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Back" }).performClick(nil)
+        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Pins" }).performClick(nil)
+        XCTAssertTrue(controller.popover.contentViewController === controller.pinsViewController)
+        XCTAssertEqual(controller.pinsViewController.rows.count, 1)
+        XCTAssertTrue(controller.popover.isShown)
     }
 
     func testPanelSnapshotHasVisibleControlsAndPreviews() throws {
