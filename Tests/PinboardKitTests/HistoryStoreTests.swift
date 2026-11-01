@@ -140,7 +140,7 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertNotNil(entry.annotationData)
 
         let annotationStore = AnnotationStore()
-        annotationStore.restore(from: try XCTUnwrap(entry.annotationData))
+        annotationStore.restore(try AnnotationStore.decode(XCTUnwrap(entry.annotationData)))
         XCTAssertEqual(annotationStore.annotations.count, 1)
         XCTAssertEqual(annotationStore.annotations[0].tool, .rectangle)
     }

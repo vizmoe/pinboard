@@ -152,6 +152,10 @@ final class PinRootView: NSView {
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
         let point = convert(event.locationInWindow, from: nil)
+        if event.clickCount == 2, !isEditingContent {
+            pinController?.copyAndClose()
+            return
+        }
         let edge = resizeEdge(at: point)
         if !edge.isEmpty {
             pinController?.beginResize(edge: edge)

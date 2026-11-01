@@ -8,6 +8,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
     case line
     case freehand
     case text
+    case counter
     case highlight
     case blur
     case mosaic
@@ -22,6 +23,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .line: return "line.diagonal"
         case .freehand: return "scribble"
         case .text: return "textformat"
+        case .counter: return "number.circle"
         case .highlight: return "highlighter"
         case .blur: return "drop.circle"
         case .mosaic: return "squareshape.split.3x3"
@@ -38,10 +40,45 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .line: return "Line"
         case .freehand: return "Pen"
         case .text: return "Text"
+        case .counter: return "Counter"
         case .highlight: return "Highlight"
         case .blur: return "Blur"
         case .mosaic: return "Mosaic"
         case .crop: return "Crop"
+        }
+    }
+
+    /// Single-key tools, matching familiar screenshot editors.
+    var shortcut: String {
+        switch self {
+        case .select: return "v"
+        case .rectangle: return "r"
+        case .ellipse: return "o"
+        case .arrow: return "a"
+        case .line: return "l"
+        case .freehand: return "p"
+        case .text: return "t"
+        case .counter: return "n"
+        case .highlight: return "h"
+        case .blur: return "b"
+        case .mosaic: return "m"
+        case .crop: return "c"
+        }
+    }
+
+    /// Shift constrains squares/circles and snaps lines to 45-degree angles.
+    func constrainedEndpoint(from start: CGPoint, to end: CGPoint) -> CGPoint {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        switch self {
+        case .rectangle, .ellipse:
+            let side = max(abs(dx), abs(dy))
+            return CGPoint(x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side))
+        case .arrow, .line:
+            let angle = (atan2(dy, dx) / (.pi / 4)).rounded() * (.pi / 4)
+            let length = hypot(dx, dy)
+            return CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
+        default: return end
         }
     }
 
@@ -104,6 +141,11 @@ struct Annotation: Codable, Identifiable, Equatable {
     /// Area used for hit testing and selection handles.
     func boundingBox(textSizer: (Annotation) -> CGSize) -> CGRect {
         switch tool {
+        case .counter:
+            let origin = points.first ?? .zero
+            let diameter = max(style.fontSize * 1.8, 24)
+            return CGRect(x: origin.x - diameter / 2, y: origin.y - diameter / 2,
+                          width: diameter, height: diameter)
         case .text:
             let origin = points.first ?? .zero
             let size = textSizer(self)
@@ -117,7 +159,9 @@ struct Annotation: Codable, Identifiable, Equatable {
         switch tool {
         case .freehand:
             let tolerance = max(style.lineWidth, 6)
-            return points.contains { hypot($0.x - point.x, $0.y - point.y) <= tolerance * 1.5 }
+            return zip(points, points.dropFirst()).contains {
+                Self.distance(from: point, toSegment: $0, $1) <= tolerance * 1.5
+            }
         case .line, .arrow:
             guard points.count >= 2 else { return false }
             return Annotation.distance(from: point, toSegment: points[0], points[1]) <= max(style.lineWidth, 8)

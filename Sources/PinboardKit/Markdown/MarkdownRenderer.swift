@@ -1,17 +1,10 @@
 import AppKit
+import cmark_gfm
+import cmark_gfm_extensions
 
-/// Converts Markdown source into a display-only attributed string.
-///
-/// Foundation's parser (cmark) exposes the document structure as
-/// `PresentationIntent`s attached to each run. This renderer walks those runs
-/// and turns them into AppKit fonts, paragraph styles, list markers and quote
-/// bars — and an `![alt](url)` into an attachment tagged by `DeferredImages`,
-/// whose pixels the pin resolves later. The source string is never mutated: a
-/// Markdown pin keeps the raw text as its canonical content and re-renders
-/// from it on demand.
-///
-/// The output is for display and measuring; it is not fed back into the
-/// document. Copying a Markdown pin copies its source instead.
+/// GFM syntax is parsed by cmark-gfm with its extensions explicitly enabled.
+/// This renderer owns native AppKit presentation; raw HTML is displayed as
+/// literal text. Copying and history always retain the original source.
 enum MarkdownRenderer {
     struct Style {
         var baseFont: NSFont = TextDefaults.font
@@ -19,45 +12,40 @@ enum MarkdownRenderer {
         var secondaryTextColor: NSColor = .secondaryLabelColor
         var linkColor: NSColor = .linkColor
         var codeBackgroundColor: NSColor = NSColor.labelColor.withAlphaComponent(0.08)
-
         static let `default` = Style()
     }
 
-    /// Slant added when the base family has no italic face (e.g. PingFang SC),
-    /// so emphasised runs stay visually distinct.
     static let syntheticObliqueness: CGFloat = 0.2
-
-    /// Number of "─" glyphs used for `---` thematic breaks. Long enough to
-    /// read as a rule at the pins' usual widths.
-    private static let thematicBreakGlyphCount = 32
+    private static let registerExtensions: Void = cmark_gfm_core_extensions_ensure_registered()
 
     static func render(_ source: String, style: Style = .default) -> NSAttributedString {
-        guard !source.isEmpty else { return NSAttributedString() }
-        let parsed: AttributedString
-        do {
-            parsed = try AttributedString(markdown: source, options: .init(
-                interpretedSyntax: .full,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            ))
-        } catch {
-            // cmark only fails when it cannot read the input at all; showing it
-            // as plain text beats showing nothing.
-            return NSAttributedString(string: source, attributes: [
-                .font: style.baseFont,
-                .foregroundColor: style.textColor
-            ])
+        _ = registerExtensions
+        guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { preconditionFailure("Cannot allocate Markdown parser") }
+        defer { cmark_parser_free(parser) }
+        for name in ["table", "strikethrough", "tasklist", "autolink", "tagfilter"] {
+            guard let ext = cmark_find_syntax_extension(name) else { preconditionFailure("Missing GFM extension: \(name)") }
+            precondition(cmark_parser_attach_syntax_extension(parser, ext) != 0)
         }
+        source.withCString { cmark_parser_feed(parser, $0, source.utf8.count) }
+        guard let document = cmark_parser_finish(parser) else { preconditionFailure("Cannot parse Markdown") }
+        defer { cmark_node_free(document) }
         let builder = Builder(style: style)
-        for run in parsed.runs {
-            builder.append(run, text: String(parsed[run.range].characters))
-        }
+        for child in children(of: document) { builder.append(child) }
         return builder.finish()
     }
 
-    /// Returns `font` with the given traits, falling back gracefully: a family
-    /// without an italic face keeps the traits it does have (PingFang SC, for
-    /// example, has bold but no italic), and callers add synthetic
-    /// `obliqueness` when italic could not be resolved.
+    private typealias Node = UnsafeMutablePointer<cmark_node>
+
+    private static func children(of node: Node) -> [Node] {
+        var result: [Node] = []
+        var child = cmark_node_first_child(node)
+        while let current = child {
+            result.append(current)
+            child = cmark_node_next(current)
+        }
+        return result
+    }
+
     static func font(from base: NSFont, bold: Bool, italic: Bool = false, size: CGFloat? = nil) -> NSFont {
         let pointSize = size ?? base.pointSize
         func resolve(_ traits: NSFontDescriptor.SymbolicTraits) -> NSFont? {
@@ -69,387 +57,198 @@ enum MarkdownRenderer {
         return NSFont(descriptor: base.fontDescriptor, size: pointSize) ?? base
     }
 
-    /// The concrete face behind a (possibly dynamic) base font. Using one
-    /// representation everywhere keeps AppKit from re-matching plain runs when
-    /// they sit next to markers, tabs or bold/italic runs.
     static func plainFont(_ base: NSFont) -> NSFont {
         NSFont(descriptor: base.fontDescriptor, size: base.pointSize) ?? base
     }
 
-    // MARK: - Builder
-
     private final class Builder {
-        private let style: Style
-        private let output = NSMutableAttributedString()
-        private var block: Block?
-        /// List items whose bullet/number was already emitted. A list item may
-        /// contain several paragraphs; only the first one carries the marker.
-        private var markedListItems: Set<Int> = []
+        let style: Style
+        let output = NSMutableAttributedString()
 
-        init(style: Style) {
-            self.style = style
-        }
+        init(style: Style) { self.style = style }
 
-        private var plainFont: NSFont { MarkdownRenderer.plainFont(style.baseFont) }
-
-        func append(_ run: AttributedString.Runs.Run, text: String) {
-            let components = run.presentationIntent?.components ?? []
-            let key = Self.blockKey(components)
-            if let current = block, current.key == key {
-                current.append(run, components: components, text: text, style: style)
-            } else {
-                flush()
-                let newBlock = Block(key: key, components: components)
-                newBlock.append(run, components: components, text: text, style: style)
-                block = newBlock
-            }
+        private var attributes: [NSAttributedString.Key: Any] {
+            [.font: plainFont(style.baseFont), .foregroundColor: style.textColor]
         }
 
         func finish() -> NSAttributedString {
-            flush()
-            // Blocks are separated by newlines; the last one is not needed.
-            if output.length > 0, output.string.hasSuffix("\n") {
+            if output.length > 0, output.string.hasSuffix("\n"),
+               (output.attribute(.paragraphStyle, at: output.length - 1, effectiveRange: nil)
+                as? NSParagraphStyle)?.textBlocks.isEmpty != false {
                 output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1))
             }
             return output
         }
 
-        private static func blockKey(_ components: [PresentationIntent.IntentType]) -> Int? {
-            // Table cells share a row: keeping one block per row lets the
-            // cells be joined with tabs instead of one line per cell.
-            if let row = components.first(where: { $0.kind.isTableRow }) {
-                return row.identity
+        func append(_ node: Node, indent: CGFloat = 0, quoteDepth: Int = 0, marker: String = "") {
+            let type = cmark_node_get_type(node)
+            if type == CMARK_NODE_LIST {
+                appendList(node, indent: indent, quoteDepth: quoteDepth)
+                return
             }
-            return components.first?.identity
-        }
-
-        private func flush() {
-            guard let block else { return }
-            defer { self.block = nil }
-            let kind = BlockKind(components: block.components)
-            var content = block.content
-
-            switch kind {
-            case .thematicBreak:
-                content = NSMutableAttributedString(
-                    string: String(repeating: "─", count: MarkdownRenderer.thematicBreakGlyphCount),
-                    attributes: [.font: plainFont, .foregroundColor: style.secondaryTextColor]
-                )
-            case .codeBlock:
-                stripTrailingNewlines(from: content)
-                content.addAttribute(.backgroundColor, value: style.codeBackgroundColor,
-                                     range: content.fullRange)
-                content.addAttribute(.font, value: codeFont(bold: false), range: content.fullRange)
-            case .listItem:
-                applyTaskListItemMarker(to: content)
-            default:
-                break
+            if type == CMARK_NODE_BLOCK_QUOTE {
+                for child in children(of: node) { append(child, indent: indent, quoteDepth: quoteDepth + 1) }
+                return
             }
-            guard content.length > 0 else { return }
+            if String(cString: cmark_node_get_type_string(node)) == "table" {
+                appendTable(node)
+                return
+            }
 
-            let prefix = NSMutableAttributedString()
+            var base = attributes
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineSpacing = 2
-
-            switch kind {
-            case .heading(let level):
-                content.addAttribute(.font, value: MarkdownRenderer.font(
-                    from: style.baseFont, bold: true, size: style.baseFont.pointSize + Self.headingSizeDelta(level)
-                ), range: content.fullRange)
+            paragraph.paragraphSpacing = 7
+            let content: NSMutableAttributedString
+            switch type {
+            case CMARK_NODE_HEADING:
+                let level = Int(cmark_node_get_heading_level(node))
+                let deltas: [CGFloat] = [7, 4, 2.5, 1, 0, -1]
+                base[.font] = font(from: style.baseFont, bold: true, size: style.baseFont.pointSize + deltas[level - 1])
+                content = inlineChildren(node, attributes: base)
                 paragraph.paragraphSpacingBefore = level == 1 ? 10 : 8
                 paragraph.paragraphSpacing = 5
-
-            case .listItem(let depth, let ordered, let ordinal, let itemIdentity):
-                let indent = CGFloat(depth) * 18
-                if markedListItems.insert(itemIdentity).inserted {
-                    let marker = ordered ? "\(ordinal). " : "• "
-                    prefix.append(NSAttributedString(string: marker, attributes: [
-                        .font: plainFont,
-                        .foregroundColor: ordered ? style.textColor : style.secondaryTextColor
-                    ]))
-                    paragraph.headIndent = indent + Self.width(of: marker, font: plainFont)
-                } else {
-                    paragraph.headIndent = indent
-                }
-                paragraph.firstLineHeadIndent = indent
-                paragraph.paragraphSpacing = 3
-
-            case .blockQuote(let depth):
-                let bar = String(repeating: "▎ ", count: depth)
-                prefix.append(NSAttributedString(string: bar, attributes: [
-                    .font: plainFont, .foregroundColor: style.secondaryTextColor
-                ]))
-                // Soft breaks inside a quote become newlines; give every line
-                // its bar so the quote reads as one block.
-                insertQuoteBars(into: content, bar: bar)
-                let indent = CGFloat(depth) * 14
-                paragraph.headIndent = indent
-                paragraph.firstLineHeadIndent = indent
-                paragraph.paragraphSpacing = 4
-
-            case .codeBlock:
-                paragraph.headIndent = 10
-                paragraph.firstLineHeadIndent = 10
+            case CMARK_NODE_CODE_BLOCK:
+                base[.font] = NSFont.monospacedSystemFont(ofSize: style.baseFont.pointSize * 0.95, weight: .regular)
+                base[.backgroundColor] = style.codeBackgroundColor
+                var text = String(cString: cmark_node_get_literal(node))
+                if text.hasSuffix("\n") { text.removeLast() }
+                content = NSMutableAttributedString(string: text, attributes: base)
                 paragraph.paragraphSpacingBefore = 4
                 paragraph.paragraphSpacing = 8
-
-            case .tableRow(let header):
-                // Uniform fonts keep columns tidy and avoid AppKit re-matching
-                // plain runs around the tab characters.
-                let rowFont = header
-                    ? MarkdownRenderer.font(from: style.baseFont, bold: true)
-                    : plainFont
-                content.addAttribute(.font, value: rowFont, range: content.fullRange)
-                paragraph.defaultTabInterval = 96
-                paragraph.paragraphSpacing = 2
-
-            case .thematicBreak:
-                paragraph.paragraphSpacingBefore = 4
-                paragraph.paragraphSpacing = 4
-
-            case .paragraph:
-                paragraph.paragraphSpacing = 7
+            case CMARK_NODE_THEMATIC_BREAK:
+                base[.foregroundColor] = style.secondaryTextColor
+                content = NSMutableAttributedString(string: String(repeating: "─", count: 32), attributes: base)
+            case CMARK_NODE_HTML_BLOCK:
+                content = NSMutableAttributedString(
+                    string: String(cString: cmark_node_get_literal(node)).trimmingCharacters(in: .newlines), attributes: base)
+            case CMARK_NODE_PARAGRAPH:
+                content = inlineChildren(node, attributes: base)
+            default:
+                for child in children(of: node) { append(child, indent: indent, quoteDepth: quoteDepth, marker: marker) }
+                return
             }
 
-            let assembled = NSMutableAttributedString(attributedString: prefix)
+            let quote = String(repeating: "▎ ", count: quoteDepth)
+            let prefix = quote + marker
+            let assembled = NSMutableAttributedString(string: prefix, attributes: attributes)
+            if !quote.isEmpty {
+                assembled.addAttribute(.foregroundColor, value: style.secondaryTextColor,
+                                       range: NSRange(location: 0, length: quote.utf16.count))
+                for index in stride(from: content.length - 1, through: 0, by: -1) {
+                    if (content.string as NSString).character(at: index) == 10 {
+                        content.insert(NSAttributedString(string: quote, attributes: attributes), at: index + 1)
+                    }
+                }
+            }
             assembled.append(content)
+            paragraph.firstLineHeadIndent = indent + CGFloat(quoteDepth) * 14
+            paragraph.headIndent = paragraph.firstLineHeadIndent
+                + (prefix as NSString).size(withAttributes: attributes).width
+            if type == CMARK_NODE_CODE_BLOCK {
+                paragraph.firstLineHeadIndent += 10
+                paragraph.headIndent += 10
+            }
+            assembled.append(NSAttributedString(string: "\n", attributes: base))
             assembled.addAttribute(.paragraphStyle, value: paragraph, range: assembled.fullRange)
             output.append(assembled)
-            output.append(NSAttributedString(string: "\n", attributes: [
-                .font: plainFont, .foregroundColor: style.textColor, .paragraphStyle: paragraph
-            ]))
         }
 
-        // MARK: - Inline pieces
-
-        private func applyTaskListItemMarker(to content: NSMutableAttributedString) {
-            let marker: String
-            let isChecked: Bool
-            switch content.string.prefix(4) {
-            case "[ ] ": (marker, isChecked) = ("☐ ", false)
-            case "[x] ", "[X] ": (marker, isChecked) = ("☑ ", true)
-            default: return
-            }
-            let attributes = content.attributes(at: 0, effectiveRange: nil)
-            content.replaceCharacters(in: NSRange(location: 0, length: 4),
-                                      with: NSAttributedString(string: marker, attributes: attributes))
-            if isChecked, content.length > 2 {
-                let range = NSRange(location: 2, length: content.length - 2)
-                content.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-                content.addAttribute(.foregroundColor, value: style.secondaryTextColor, range: range)
-            }
-        }
-
-        private func insertQuoteBars(into content: NSMutableAttributedString, bar: String) {
-            guard content.length > 1 else { return }
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: plainFont, .foregroundColor: style.secondaryTextColor
-            ]
-            // Walk backwards so inserting never shifts offsets still to visit.
-            for index in stride(from: content.length - 1, through: 0, by: -1) {
-                let character = (content.string as NSString).substring(with: NSRange(location: index, length: 1))
-                if character == "\n" {
-                    content.insert(NSAttributedString(string: bar, attributes: attributes), at: index + 1)
+        private func appendList(_ list: Node, indent: CGFloat, quoteDepth: Int) {
+            let ordered = cmark_node_get_list_type(list) == CMARK_ORDERED_LIST
+            let start = Int(cmark_node_get_list_start(list))
+            for (index, item) in children(of: list).enumerated() {
+                let task = String(cString: cmark_node_get_type_string(item)) == "tasklist"
+                let checked = task && cmark_gfm_extensions_get_tasklist_item_checked(item)
+                let marker = task ? (checked ? "☑ " : "☐ ") : (ordered ? "\(start + index). " : "• ")
+                let startOffset = output.length
+                for (blockIndex, block) in children(of: item).enumerated() {
+                    append(block, indent: indent + 18, quoteDepth: quoteDepth,
+                           marker: blockIndex == 0 ? marker : "")
+                }
+                if checked, output.length > startOffset {
+                    output.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue,
+                                        range: NSRange(location: startOffset, length: output.length - startOffset))
                 }
             }
         }
 
-        private func stripTrailingNewlines(from content: NSMutableAttributedString) {
-            while content.length > 0, content.string.hasSuffix("\n") {
-                content.deleteCharacters(in: NSRange(location: content.length - 1, length: 1))
-            }
-        }
-
-        private func codeFont(bold: Bool) -> NSFont {
-            NSFont.monospacedSystemFont(ofSize: style.baseFont.pointSize * 0.95,
-                                        weight: bold ? .semibold : .regular)
-        }
-
-        private static func headingSizeDelta(_ level: Int) -> CGFloat {
-            switch level {
-            case 1: return 7
-            case 2: return 4
-            case 3: return 2.5
-            case 4: return 1
-            case 5: return 0
-            default: return -1
-            }
-        }
-
-        private static func width(of string: String, font: NSFont) -> CGFloat {
-            ceil((string as NSString).size(withAttributes: [.font: font]).width)
-        }
-    }
-
-    // MARK: - Blocks
-
-    private final class Block {
-        let key: Int?
-        let components: [PresentationIntent.IntentType]
-        let content = NSMutableAttributedString()
-        private var lastCellIdentity: Int?
-
-        init(key: Int?, components: [PresentationIntent.IntentType]) {
-            self.key = key
-            self.components = components
-        }
-
-        func append(_ run: AttributedString.Runs.Run, components: [PresentationIntent.IntentType], text: String, style: Style) {
-            let plainFont = MarkdownRenderer.plainFont(style.baseFont)
-            if let cell = components.first(where: { $0.kind.isTableCell }) {
-                if let lastCellIdentity, lastCellIdentity != cell.identity {
-                    content.append(NSAttributedString(string: "\t", attributes: [
-                        .font: plainFont, .foregroundColor: style.textColor
-                    ]))
-                }
-                lastCellIdentity = cell.identity
-            }
-            let inline = run.inlinePresentationIntent ?? []
-            if inline.contains(.softBreak) || inline.contains(.lineBreak) {
-                content.append(NSAttributedString(string: "\n", attributes: [
-                    .font: plainFont, .foregroundColor: style.textColor
-                ]))
-                return
-            }
-            // An image becomes an empty attachment carrying its URL and alt
-            // text; the pin resolves the pixels once it has a window. cmark
-            // keeps the alt text in the run's characters — an image without
-            // alt text only carries the object-replacement character.
-            if let url = run.imageURL {
-                let alt = text.replacingOccurrences(of: "\u{FFFC}", with: "")
-                content.append(Self.imagePlaceholder(url: url, alt: alt, style: style))
-                return
-            }
-            content.append(NSAttributedString(string: text, attributes: Self.attributes(
-                for: run, inline: inline, style: style
-            )))
-        }
-
-        /// The display form of `![alt](url)`: an empty attachment tagged with
-        /// its source, so `TextPinView` can fetch, cache and size it later.
-        private static func imagePlaceholder(url: URL, alt: String, style: Style) -> NSAttributedString {
-            let placeholder = NSMutableAttributedString(attachment: NSTextAttachment())
-            var attributes: [NSAttributedString.Key: Any] = [
-                .font: MarkdownRenderer.plainFont(style.baseFont),
-                .foregroundColor: style.textColor,
-                DeferredImages.sourceAttribute: url.absoluteString
-            ]
-            if !alt.isEmpty {
-                attributes[DeferredImages.altAttribute] = alt
-            }
-            placeholder.addAttributes(attributes, range: NSRange(location: 0, length: placeholder.length))
-            return placeholder
-        }
-
-        private static func attributes(
-            for run: AttributedString.Runs.Run,
-            inline: InlinePresentationIntent,
-            style: Style
-        ) -> [NSAttributedString.Key: Any] {
-            let bold = inline.contains(.stronglyEmphasized)
-            let italic = inline.contains(.emphasized)
-            let isCode = inline.contains(.code)
-            let font: NSFont
-            if isCode {
-                font = NSFont.monospacedSystemFont(ofSize: style.baseFont.pointSize * 0.95,
-                                                   weight: bold ? .semibold : .regular)
-            } else {
-                font = MarkdownRenderer.font(from: style.baseFont, bold: bold, italic: italic)
-            }
-            var attributes: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: style.textColor
-            ]
-            if italic, !font.fontDescriptor.symbolicTraits.contains(.italic) {
-                attributes[.obliqueness] = MarkdownRenderer.syntheticObliqueness
-            }
-            if isCode {
-                attributes[.backgroundColor] = style.codeBackgroundColor
-            }
-            if inline.contains(.strikethrough) {
-                attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
-            }
-            if let link = run.link {
-                attributes[.foregroundColor] = style.linkColor
-                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                attributes[.link] = link.absoluteString
-            }
-            return attributes
-        }
-    }
-
-    private enum BlockKind: Equatable {
-        case paragraph
-        case heading(Int)
-        case listItem(depth: Int, ordered: Bool, ordinal: Int, itemIdentity: Int)
-        case blockQuote(depth: Int)
-        case codeBlock
-        case tableRow(header: Bool)
-        case thematicBreak
-
-        init(components: [PresentationIntent.IntentType]) {
-            var listDepth = 0
-            var isOrdered = false
-            var sawListType = false
-            var ordinal = 1
-            var itemIdentity: Int?
-            var quoteDepth = 0
-            var headingLevel = 0
-            var isCode = false
-            var isThematicBreak = false
-            var tableIsHeader: Bool?
-
-            // Components are innermost-first; the first list/listItem seen is
-            // the one this block belongs to.
-            for component in components {
-                switch component.kind {
-                case .header(let level): headingLevel = level
-                case .unorderedList:
-                    listDepth += 1
-                    if !sawListType { isOrdered = false; sawListType = true }
-                case .orderedList:
-                    listDepth += 1
-                    if !sawListType { isOrdered = true; sawListType = true }
-                case .listItem(let index):
-                    if itemIdentity == nil { ordinal = index; itemIdentity = component.identity }
-                case .blockQuote: quoteDepth += 1
-                case .codeBlock: isCode = true
-                case .thematicBreak: isThematicBreak = true
-                case .tableHeaderRow: tableIsHeader = true
-                case .tableRow: tableIsHeader = false
-                default: break
+        /// Shared table blocks preserve empty cells, column alignment and
+        /// wrapping without fixed tab stops drifting between rows.
+        private func appendTable(_ table: Node) {
+            let grid = NSTextTable()
+            grid.numberOfColumns = Int(cmark_gfm_extensions_get_table_columns(table))
+            grid.layoutAlgorithm = .automaticLayoutAlgorithm
+            grid.collapsesBorders = true
+            grid.setValue(100, type: .percentageValueType, for: .width)
+            let alignments = cmark_gfm_extensions_get_table_alignments(table)!
+            for (rowIndex, row) in children(of: table).enumerated() {
+                for (column, cell) in children(of: row).enumerated() {
+                    let block = NSTextTableBlock(table: grid, startingRow: rowIndex, rowSpan: 1,
+                                                startingColumn: column, columnSpan: 1)
+                    block.setWidth(5, type: .absoluteValueType, for: .padding)
+                    block.setWidth(0.5, type: .absoluteValueType, for: .border)
+                    block.setBorderColor(style.secondaryTextColor.withAlphaComponent(0.35))
+                    if rowIndex == 0 { block.backgroundColor = style.codeBackgroundColor }
+                    let paragraph = NSMutableParagraphStyle()
+                    paragraph.textBlocks = [block]
+                    switch alignments[column] {
+                    case 99: paragraph.alignment = .center // c
+                    case 114: paragraph.alignment = .right // r
+                    default: paragraph.alignment = .left
+                    }
+                    var base = attributes
+                    if rowIndex == 0 { base[.font] = font(from: style.baseFont, bold: true) }
+                    let content = inlineChildren(cell, attributes: base)
+                    content.append(NSAttributedString(string: "\n", attributes: base))
+                    content.addAttribute(.paragraphStyle, value: paragraph, range: content.fullRange)
+                    output.append(content)
                 }
             }
+        }
 
-            if isThematicBreak {
-                self = .thematicBreak
-            } else if isCode {
-                self = .codeBlock
-            } else if headingLevel > 0 {
-                self = .heading(headingLevel)
-            } else if let itemIdentity {
-                self = .listItem(depth: listDepth, ordered: isOrdered, ordinal: ordinal, itemIdentity: itemIdentity)
-            } else if quoteDepth > 0 {
-                self = .blockQuote(depth: quoteDepth)
-            } else if let tableIsHeader {
-                self = .tableRow(header: tableIsHeader)
-            } else {
-                self = .paragraph
+        private func inlineChildren(_ node: Node, attributes: [NSAttributedString.Key: Any]) -> NSMutableAttributedString {
+            let result = NSMutableAttributedString()
+            for child in children(of: node) { result.append(inline(child, attributes: attributes)) }
+            return result
+        }
+
+        private func inline(_ node: Node, attributes inherited: [NSAttributedString.Key: Any]) -> NSAttributedString {
+            var attrs = inherited
+            let type = cmark_node_get_type(node)
+            switch type {
+            case CMARK_NODE_TEXT, CMARK_NODE_HTML_INLINE:
+                return NSAttributedString(string: String(cString: cmark_node_get_literal(node)), attributes: attrs)
+            case CMARK_NODE_SOFTBREAK, CMARK_NODE_LINEBREAK:
+                return NSAttributedString(string: "\n", attributes: attrs)
+            case CMARK_NODE_CODE:
+                attrs[.font] = NSFont.monospacedSystemFont(ofSize: style.baseFont.pointSize * 0.95, weight: .regular)
+                attrs[.backgroundColor] = style.codeBackgroundColor
+                return NSAttributedString(string: String(cString: cmark_node_get_literal(node)), attributes: attrs)
+            case CMARK_NODE_STRONG, CMARK_NODE_EMPH:
+                let base = attrs[.font] as! NSFont
+                let traits = base.fontDescriptor.symbolicTraits
+                let italic = type == CMARK_NODE_EMPH || traits.contains(.italic) || attrs[.obliqueness] != nil
+                let resolved = font(from: base, bold: type == CMARK_NODE_STRONG || traits.contains(.bold), italic: italic)
+                attrs[.font] = resolved
+                if italic, !resolved.fontDescriptor.symbolicTraits.contains(.italic) { attrs[.obliqueness] = syntheticObliqueness }
+            case CMARK_NODE_LINK:
+                attrs[.link] = String(cString: cmark_node_get_url(node))
+                attrs[.foregroundColor] = style.linkColor
+                attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            case CMARK_NODE_IMAGE:
+                let result = NSMutableAttributedString(attachment: NSTextAttachment())
+                attrs[DeferredImages.sourceAttribute] = String(cString: cmark_node_get_url(node))
+                let alt = inlineChildren(node, attributes: attributes).string
+                if !alt.isEmpty { attrs[DeferredImages.altAttribute] = alt }
+                result.addAttributes(attrs, range: result.fullRange)
+                return result
+            default:
+                if String(cString: cmark_node_get_type_string(node)) == "strikethrough" {
+                    attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                }
             }
+            return inlineChildren(node, attributes: attrs)
         }
-    }
-}
-
-extension PresentationIntent.Kind {
-    fileprivate var isTableRow: Bool {
-        switch self {
-        case .tableRow, .tableHeaderRow: return true
-        default: return false
-        }
-    }
-
-    fileprivate var isTableCell: Bool {
-        if case .tableCell = self { return true }
-        return false
     }
 }

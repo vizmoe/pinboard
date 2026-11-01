@@ -16,7 +16,7 @@ protocol PinContentDisplaying: NSView {
     func idealSize(fitting maxSize: CGSize) -> CGSize
     func currentContent() -> PinContent
     func captureState() -> PinContentState
-    func copyToPasteboard()
+    @discardableResult func copy(to pasteboard: NSPasteboard) -> Bool
     func endEditing()
 
     /// Cursor for a point inside the content area. The window owns all cursor
@@ -36,6 +36,10 @@ protocol PinContentDisplaying: NSView {
 }
 
 extension PinContentDisplaying {
+    func copyToPasteboard() {
+        if !copy(to: .general) { Toast.show("Couldn't copy pin", duration: 3) }
+    }
+
     func captureState() -> PinContentState { PinContentState(content: currentContent()) }
     var contentAspectRatio: CGSize? { nil }
     var minimumPinSize: CGSize { CGSize(width: 120, height: 60) }

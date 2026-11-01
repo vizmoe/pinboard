@@ -21,7 +21,7 @@ final class AnnotationStore {
     /// Wraps one user-visible edit in its own undo group. Nested calls made
     /// while undoing/redoing reuse the group the manager already opened.
     private func transaction(_ body: () -> Void) {
-        let shouldGroup = !undoManager.isUndoing && !undoManager.isRedoing
+        let shouldGroup = !undoManager.isUndoing && !undoManager.isRedoing && undoManager.groupingLevel == 0
         if shouldGroup { undoManager.beginUndoGrouping() }
         body()
         if shouldGroup { undoManager.endUndoGrouping() }
@@ -35,11 +35,12 @@ final class AnnotationStore {
         transaction { apply(annotations + [annotation], actionName: "Add Annotation") }
     }
 
-    func update(_ annotation: Annotation) {
-        guard let index = annotations.firstIndex(where: { $0.id == annotation.id }) else { return }
+    func update(_ annotation: Annotation, actionName: String = "Move Annotation") {
+        guard let index = annotations.firstIndex(where: { $0.id == annotation.id }),
+              annotations[index] != annotation else { return }
         var next = annotations
         next[index] = annotation
-        transaction { apply(next, actionName: "Move Annotation") }
+        transaction { apply(next, actionName: actionName) }
     }
 
     func remove(id: UUID) {
@@ -106,14 +107,36 @@ final class AnnotationStore {
         var cropRect: CGRect?
     }
 
-    func encoded() -> Data? {
-        try? JSONEncoder().encode(Payload(annotations: annotations, cropRect: cropRect))
+    func encoded() -> Data {
+        // Live geometry contains only finite values. Encoding failure here is
+        // a programming error and must never turn an annotated pin into nil.
+        try! JSONEncoder().encode(Payload(annotations: annotations, cropRect: cropRect))
     }
 
-    /// Restores editable annotation state (e.g. from a history record).
-    /// Loaded state has no undo steps — undoing past it would be meaningless.
-    func restore(from data: Data) {
-        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return }
+    enum PayloadError: Error { case invalidGeometry }
+
+    static func decode(_ data: Data) throws -> Payload {
+        let payload = try JSONDecoder().decode(Payload.self, from: data)
+        for annotation in payload.annotations {
+            let minimumPoints = [.text, .counter].contains(annotation.tool) ? 1 : 2
+            guard annotation.points.count >= minimumPoints,
+                  annotation.points.allSatisfy({ $0.x.isFinite && $0.y.isFinite }),
+                  annotation.style.lineWidth.isFinite, annotation.style.lineWidth > 0,
+                  annotation.style.fontSize.isFinite, annotation.style.fontSize > 0,
+                  annotation.tool != .select, annotation.tool != .crop else { throw PayloadError.invalidGeometry }
+        }
+        if let crop = payload.cropRect {
+            guard crop.origin.x.isFinite, crop.origin.y.isFinite,
+                  crop.width.isFinite, crop.height.isFinite, crop.width > 0, crop.height > 0 else {
+                throw PayloadError.invalidGeometry
+            }
+        }
+        return payload
+    }
+
+    /// Restoration accepts a decoded payload; the history/UI boundary reports
+    /// corrupt data before constructing a pin or replacing clipboard contents.
+    func restore(_ payload: Payload) {
         annotations = payload.annotations
         cropRect = payload.cropRect
         undoManager.removeAllActions()

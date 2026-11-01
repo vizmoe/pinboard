@@ -32,9 +32,9 @@ final class HistoryViewModel: ObservableObject {
     func copy(_ id: HistoryRecord.ID) {
         guard let entry = store.entry(id: id) else { return }
         let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
         switch entry.content {
         case .text(let attributed):
+            pasteboard.clearContents()
             // Plain Text and Markdown records hold no formatting; their data
             // is the source, matching the live pin.
             if entry.textMode == .markdown || entry.textMode == .plainText {
@@ -48,9 +48,15 @@ final class HistoryViewModel: ObservableObject {
             var output = image
             if let annotationData = entry.annotationData {
                 let imagePin = ImagePinView(image: image)
-                imagePin.restoreAnnotations(annotationData)
+                do {
+                    try imagePin.restoreAnnotations(annotationData)
+                } catch {
+                    manager.onHistoryError?(error)
+                    return
+                }
                 output = imagePin.renderedImage()
             }
+            pasteboard.clearContents()
             pasteboard.writeObjects([output])
         }
     }
@@ -193,11 +199,7 @@ struct HistoryView: View {
 
     private func kindLabel(of record: HistoryRecord) -> String {
         guard record.kind == .text else { return "Image" }
-        switch record.textMode {
-        case .plainText: return "Plain Text"
-        case .markdown: return "Markdown"
-        case .richText, nil: return "Text"
-        }
+        return (record.textMode ?? .richText).title
     }
 
     @ViewBuilder

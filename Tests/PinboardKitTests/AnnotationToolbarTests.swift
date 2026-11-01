@@ -16,7 +16,8 @@ final class AnnotationToolbarTests: XCTestCase {
         view.beginAnnotating()
         let canvas = try XCTUnwrap(view.subviews.compactMap { $0 as? AnnotationCanvasView }.first)
         let toolbar = try XCTUnwrap(view.annotationToolbar)
-        let slider = try XCTUnwrap(toolbar.stack.arrangedSubviews.compactMap { $0 as? NSSlider }.first)
+        let properties = try XCTUnwrap(toolbar.stack.arrangedSubviews.last as? NSStackView)
+        let slider = try XCTUnwrap(properties.arrangedSubviews.compactMap { $0 as? NSSlider }.first)
         return (view, canvas, slider)
     }
 

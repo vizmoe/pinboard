@@ -43,7 +43,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
     private var pixelSize: CGSize { baseImage.pixelSize }
     private var sourceRect: CGRect { annotationStore.cropRect ?? CGRect(origin: .zero, size: pixelSize) }
 
-    init(image: NSImage, annotationData: Data? = nil) {
+    init(image: NSImage, annotations: AnnotationStore.Payload? = nil) {
         baseImage = image
         baseCGImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         effects = baseCGImage.map(ImageEffects.init(base:))
@@ -73,7 +73,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
             self?.refreshAfterStoreChange()
             self?.pinController?.contentDidChange()
         }
-        if let annotationData { restoreAnnotations(annotationData) }
+        if let annotations { annotationStore.restore(annotations) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
@@ -103,7 +103,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
         if event.clickCount == 2 {
-            beginAnnotating()
+            pinController?.copyAndClose()
             return
         }
         WindowInteraction.move(window: window, dragCursor: .closedHand, endCursor: .openHand)
@@ -118,6 +118,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
     func beginAnnotating() {
         guard !isAnnotating else { return }
         isAnnotating = true
+        pinController?.rootView.isEditingContent = true
         canvas.isActive = true
         canvas.style = .current()
         if annotationToolbar == nil {
@@ -135,6 +136,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
         guard isAnnotating else { return }
         canvas.commitTextEditor()
         isAnnotating = false
+        pinController?.rootView.isEditingContent = false
         canvas.isActive = false
         annotationToolbar?.hide()
         pinController?.refreshChrome()
@@ -151,14 +153,15 @@ final class ImagePinView: NSView, PinContentDisplaying {
     }
 
     func refreshAfterStoreChange() {
+        canvas.reconcileSelection()
         updateContentsRect()
         canvas.needsDisplay = true
         annotationToolbar?.syncSelection()
     }
 
     /// Restores annotations from a history record so re-pinned images stay editable.
-    func restoreAnnotations(_ data: Data) {
-        annotationStore.restore(from: data)
+    func restoreAnnotations(_ data: Data) throws {
+        annotationStore.restore(try AnnotationStore.decode(data))
     }
 
     private func updateContentsRect() {
@@ -227,10 +230,11 @@ final class ImagePinView: NSView, PinContentDisplaying {
         isAnnotating ? canvas.cursor(at: convert(point, from: superview)) : .openHand
     }
 
-    func copyToPasteboard() {
-        let pasteboard = NSPasteboard.general
+    @discardableResult
+    func copy(to pasteboard: NSPasteboard) -> Bool {
+        let image = renderedImage()
         pasteboard.clearContents()
-        pasteboard.writeObjects([renderedImage()])
+        return pasteboard.writeObjects([image])
     }
 
     func chromeItems() -> [ChromeItem] {
@@ -254,6 +258,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
          menuItem("Default Size") { [weak self] in self?.resize(to: self?.naturalPointSize) },
          menuItem("Actual Pixel Size") { [weak self] in self?.resize(to: self?.sourceRect.size) },
          menuItem("Restore Original Image") { [weak self] in
+            self?.canvas.commitTextEditor()
             self?.annotationStore.reset()
             self?.refreshAfterStoreChange()
          },
@@ -281,6 +286,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
 
     /// Flattens crop + annotations onto the original pixels.
     func renderedImage() -> NSImage {
+        canvas.commitTextEditor()
         guard let baseCGImage else { return baseImage }
         let source = sourceRect
         guard source.width >= 1, source.height >= 1 else { return baseImage }
@@ -319,8 +325,15 @@ final class ImagePinView: NSView, PinContentDisplaying {
         panel.canCreateDirectories = true
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url, let data = self?.renderedImage().pngData() else { return }
-            try? data.write(to: url)
+            guard response == .OK, let url = panel.url, let self else { return }
+            do {
+                guard let data = self.renderedImage().pngData() else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try data.write(to: url, options: .atomic)
+            } catch {
+                NSAlert(error: error).runModal()
+            }
         }
     }
 }

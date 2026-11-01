@@ -55,10 +55,11 @@ library so it can be unit tested (`@testable import PinboardKit`).
   source editing), `TextFormatter` (attribute logic, unit tested),
   `TextFormatToolbar`, `TextDefaults` (PingFang SC 14, the app-wide default
   typography), `DeferredImages` (attachment tags for images that load later)
-- `Markdown` — `MarkdownRenderer` (Foundation cmark `PresentationIntent` walk →
-  display-only attributed string, unit tested; `![alt](url)` becomes a
-  `DeferredImages` placeholder) and `MarkdownTheme` (the colour palettes
-  rendered pins can wear)
+- `Markdown` — `MarkdownRenderer` (cmark-gfm tree → display-only AppKit attributed
+  string; tables use `NSTextTable`, images use `DeferredImages`) and `MarkdownTheme`.
+  GFM support and deliberate presentation differences are in `docs/GFM.md`.
+- `SafeImageDownload` — C/libcurl transport; checks the resolved socket address
+  on every connection/redirect and caps response bytes while streaming.
 - `Image` — `ImagePinView` plus `Image/Annotation` (model, store with undo,
   renderer, canvas, toolbar, Core Image effects)
 - `Settings` — SwiftUI preferences window
@@ -71,12 +72,20 @@ Window management never inspects content specifics: pin views conform to
 - Pin panels disable AppKit cursor rects; `PinRootView.cursor(at:)` is the only
   place that decides pointer feedback, and it must stay in sync with
   `resizeEdge(at:)` so feedback matches the gesture.
+- Idle pins drag on a single click and copy-and-close on double-click. Editing
+  starts from the pencil/context menu; active editors retain native double-click
+  behavior. `copyAndClose` commits edits and closes only after clipboard success.
+  Placement captures the pointer once at `createPin`, with screen-edge clamping.
 - Annotations are stored in **image pixel coordinates**; the canvas only applies
   a scale transform, so the same `AnnotationRenderer` code paints the screen and
   the export. Never bake annotations into `baseImage`.
 - `AnnotationStore.undoManager` has `groupsByEvent = false`; mutations must go
   through `transaction { … }` so one gesture is one undo step (edits happen
   inside modal mouse-tracking loops where run loop boundaries are unreliable).
+  Slider tracking opens an outer undo group. Control-point drags preview locally
+  and commit once; handles are hit-tested in view points. Decode annotation
+  payloads at the history boundary before creating a pin; corrupt data reports an
+  error rather than becoming an unannotated image.
 - Text attribute changes go through `TextFormatter`, which brackets every edit
   with `shouldChangeText(in:replacementString:)` / `didChangeText()` (how AppKit
   records attribute-only undo) and transforms fonts run by run so untouched RTF
@@ -97,9 +106,8 @@ Window management never inspects content specifics: pin views conform to
 - Annotation style is per-annotation (`Annotation.style`), editable via the
   toolbar when a shape is selected (`canvas.updateSelectedStyle` — never the
   global `Preferences` seed). `AnnotationStyle.fontName` is optional so old
-  payloads still decode. Settings hosts Keyboard Shortcuts, Text (mode and
-  Markdown theme) and History; other preferences persist silently as fixed
-  defaults.
+  payloads still decode. Settings hosts Keyboard Shortcuts, Pins (placement),
+  Text (mode and Markdown theme) and History.
 - Text pins have three modes (`TextContentMode`). A Markdown pin's canonical
   content is the **raw source** (kept as the `.text` attributed string), the
   idle display is `MarkdownRenderer.render(source)`, and editing shows the
@@ -148,13 +156,9 @@ Window management never inspects content specifics: pin views conform to
   `FirstMouseButton`/`FirstMouseSlider` because pin panels are non-activating.
   A pin stays in edit mode while its own toolbar, the colour panel or the font
   panel holds key focus (see `handleResignKey`).
-- Markdown images: Foundation's parser exposes `![alt](url)` as a run whose
-  `imageURL` is set and whose characters are the alt text; the renderer emits a
-  tagged placeholder instead (`DeferredImages.sourceAttribute` /
-  `altAttribute`). Two limits worth knowing: a linked image
-  (`[![alt](img)](target)`) has no `imageURL` on the run — Foundation reports
-  only the link, so it keeps its alt text — and an image without alt text
-  carries the object-replacement character, which the renderer strips.
+- Markdown images become tagged attachments (`DeferredImages.sourceAttribute` /
+  `altAttribute`); linked images retain both the image source and the enclosing
+  link. cmark-gfm extensions are explicitly enabled, including autolink.
 - Images the text only references are resolved by
   `TextPinView.resolveDeferredImages`, which runs after
   `PinWindowManager.createPin` places the pin (so they are sized against the

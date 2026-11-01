@@ -93,6 +93,17 @@ enum AnnotationRenderer {
             let origin = annotation.points.first ?? .zero
             text.draw(in: CGRect(x: origin.x, y: origin.y - size.height, width: size.width, height: size.height))
 
+        case .counter:
+            let badge = annotation.boundingBox(textSizer: textSize)
+            color.setFill()
+            NSBezierPath(ovalIn: badge).fill()
+            let label = NSAttributedString(string: annotation.text ?? "1", attributes: [
+                .font: NSFont.systemFont(ofSize: annotation.style.fontSize, weight: .bold),
+                .foregroundColor: NSColor.white
+            ])
+            let size = label.size()
+            label.draw(at: CGPoint(x: badge.midX - size.width / 2, y: badge.midY - size.height / 2))
+
         case .blur, .mosaic:
             guard let filtered = annotation.tool == .blur ? effects?.blurred : effects?.mosaic else {
                 NSColor.black.withAlphaComponent(0.6).setFill()

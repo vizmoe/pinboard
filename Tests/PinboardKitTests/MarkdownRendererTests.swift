@@ -100,18 +100,21 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(output.string.contains("---"))
     }
 
-    func testTableRowJoinsCellsWithTabsAndBoldsHeader() {
+    func testTableUsesSharedGridAndBoldsHeader() {
         let output = render("""
         | name | value |
         |------|-------|
         | a    | 1     |
         """)
-        XCTAssertTrue(output.string.contains("name\tvalue"), "header cells are tab separated")
-        XCTAssertTrue(output.string.contains("a\t1"), "body cells are tab separated")
+        XCTAssertTrue(output.string.contains("name\nvalue"))
+        XCTAssertTrue(output.string.contains("a\n1"))
         XCTAssertTrue(isBold(font(output, at: "name")))
-        XCTAssertFalse(isBold(font(output, at: "a\t1")), "body rows stay regular")
-        let row = paragraphStyle(output, at: "name")
-        XCTAssertGreaterThan(row?.defaultTabInterval ?? 0, 0, "tab stops align the columns")
+        XCTAssertFalse(isBold(font(output, at: "a\n1")), "body rows stay regular")
+        let header = paragraphStyle(output, at: "name")?.textBlocks.first as? NSTextTableBlock
+        let body = paragraphStyle(output, at: "a\n1")?.textBlocks.first as? NSTextTableBlock
+        XCTAssertNotNil(header)
+        XCTAssertTrue(header?.table === body?.table)
+        XCTAssertEqual(body?.startingRow, 1)
     }
 
     // MARK: - Inline

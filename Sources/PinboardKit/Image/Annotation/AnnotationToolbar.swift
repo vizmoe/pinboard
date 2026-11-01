@@ -5,10 +5,14 @@ import AppKit
 final class AnnotationToolbar: AttachedToolbar {
     private var toolButtons: [AnnotationTool: NSButton] = [:]
     private let colorSwatch = ColorSwatchButton(tooltip: "Color")
-    private let widthSlider = FirstMouseSlider()
+    private let widthSlider = AnnotationWidthSlider()
+    private var undoButton: NSButton!
+    private var redoButton: NSButton!
+    private var deleteButton: NSButton!
     /// Font controls shown only while the text tool is armed or a text
     /// annotation is selected — text style is a per-annotation property.
     private let fontControls = NSStackView()
+    private let properties = NSStackView()
     private let familyPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sizeField = NSTextField()
 
@@ -16,7 +20,7 @@ final class AnnotationToolbar: AttachedToolbar {
     private weak var pin: ImagePinView?
 
     private static let tools: [AnnotationTool] = [
-        .select, .rectangle, .ellipse, .arrow, .line, .freehand, .text, .highlight, .blur, .mosaic, .crop
+        .select, .rectangle, .ellipse, .arrow, .line, .freehand, .text, .counter, .highlight, .blur, .mosaic, .crop
     ]
 
     init(canvas: AnnotationCanvasView, pin: ImagePinView) {
@@ -26,11 +30,13 @@ final class AnnotationToolbar: AttachedToolbar {
         canvas.onSelectionChange = { [weak self] in self?.syncSelection() }
         buildItems()
         finalizeLayout()
+        NotificationCenter.default.addObserver(self, selector: #selector(undoGroupClosed),
+            name: .NSUndoManagerDidCloseUndoGroup, object: canvas.store.undoManager)
     }
 
     private func buildItems() {
         for tool in AnnotationToolbar.tools {
-            let button = makeButton(symbol: tool.symbol, tooltip: tool.localizedName, action: #selector(selectTool(_:)))
+            let button = makeButton(symbol: tool.symbol, tooltip: "\(tool.localizedName) (\(tool.shortcut.uppercased()))", action: #selector(selectTool(_:)))
             button.tag = AnnotationToolbar.tools.firstIndex(of: tool) ?? 0
             toolButtons[tool] = button
             stack.addArrangedSubview(button)
@@ -40,6 +46,7 @@ final class AnnotationToolbar: AttachedToolbar {
         colorSwatch.color = Preferences.shared.annotationColor
         colorSwatch.onColorChange = { [weak self] color in
             guard let self, let canvas = self.canvas else { return }
+            canvas.commitTextEditor()
             if canvas.selectedAnnotation != nil {
                 canvas.updateSelectedStyle { $0.colorHex = color.hexString }
             } else {
@@ -47,7 +54,9 @@ final class AnnotationToolbar: AttachedToolbar {
                 canvas.style.colorHex = color.hexString
             }
         }
-        stack.addArrangedSubview(colorSwatch)
+        properties.orientation = .horizontal
+        properties.spacing = 6
+        properties.addArrangedSubview(colorSwatch)
 
         fontControls.orientation = .horizontal
         fontControls.spacing = 4
@@ -76,8 +85,12 @@ final class AnnotationToolbar: AttachedToolbar {
         sizeField.widthAnchor.constraint(equalToConstant: 44).isActive = true
         fontControls.addArrangedSubview(sizeField)
         fontControls.isHidden = true
-        stack.addArrangedSubview(fontControls)
+        properties.addArrangedSubview(fontControls)
 
+        widthSlider.undoManagerForGesture = { [weak canvas] in
+            canvas?.commitTextEditor()
+            return canvas?.store.undoManager
+        }
         widthSlider.minValue = 1
         widthSlider.maxValue = 16
         widthSlider.doubleValue = Preferences.shared.annotationLineWidth
@@ -87,16 +100,37 @@ final class AnnotationToolbar: AttachedToolbar {
         widthSlider.toolTip = "Line Width"
         widthSlider.translatesAutoresizingMaskIntoConstraints = false
         widthSlider.widthAnchor.constraint(equalToConstant: 70).isActive = true
-        stack.addArrangedSubview(widthSlider)
+        properties.addArrangedSubview(widthSlider)
 
         stack.addArrangedSubview(makeSeparator())
-        stack.addArrangedSubview(makeButton(symbol: "arrow.uturn.backward", tooltip: "Undo", action: #selector(undo)))
-        stack.addArrangedSubview(makeButton(symbol: "arrow.uturn.forward", tooltip: "Redo", action: #selector(redo)))
-        stack.addArrangedSubview(makeButton(symbol: "trash", tooltip: "Delete Selection", action: #selector(deleteSelection)))
+        undoButton = makeButton(symbol: "arrow.uturn.backward", tooltip: "Undo (⌘Z)", action: #selector(undo))
+        redoButton = makeButton(symbol: "arrow.uturn.forward", tooltip: "Redo (⇧⌘Z)", action: #selector(redo))
+        deleteButton = makeButton(symbol: "trash", tooltip: "Delete Selection", action: #selector(deleteSelection))
+        [undoButton, redoButton, deleteButton].forEach { stack.addArrangedSubview($0!) }
+        stack.addArrangedSubview(makeButton(symbol: "plus.square.on.square", tooltip: "Duplicate Selection (⌘D)", action: #selector(duplicate)))
         stack.addArrangedSubview(makeButton(symbol: "arrow.counterclockwise", tooltip: "Restore Original Image", action: #selector(resetAll)))
         stack.addArrangedSubview(makeSeparator())
         stack.addArrangedSubview(makeButton(symbol: "checkmark.circle", tooltip: "Done Editing", action: #selector(finish)))
+
+        // Keep tools and contextual properties on separate rows so font controls
+        // never push the strip beyond the screen at ordinary display sizes.
+        let toolsRow = NSStackView()
+        toolsRow.orientation = .horizontal
+        toolsRow.spacing = 3
+        for view in stack.arrangedSubviews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+            toolsRow.addArrangedSubview(view)
+        }
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.addArrangedSubview(toolsRow)
+        stack.addArrangedSubview(properties)
     }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func undoGroupClosed() { syncSelection() }
 
     override func show(attachedTo parent: NSWindow) {
         super.show(attachedTo: parent)
@@ -121,12 +155,20 @@ final class AnnotationToolbar: AttachedToolbar {
         colorSwatch.setColorSilently(effectiveStyle.color)
         widthSlider.doubleValue = Double(effectiveStyle.lineWidth)
 
-        fontControls.isHidden = canvas.tool != .text && selectedText == nil
+        let effectiveTool = canvas.selectedAnnotation?.tool ?? canvas.tool
+        properties.isHidden = effectiveTool == .select || effectiveTool == .crop
+        fontControls.isHidden = effectiveTool != .text && effectiveTool != .counter && selectedText == nil
+        familyPopUp.isHidden = effectiveTool == .counter
+        widthSlider.isHidden = effectiveTool == .text || effectiveTool == .counter
         let family = effectiveStyle.fontName ?? NSFont.systemFont(ofSize: 1).familyName ?? "Helvetica"
         familyPopUp.selectItem(withTitle: family)
         if familyPopUp.selectedItem == nil { familyPopUp.setTitle(family) }
         sizeField.stringValue = String(Int(effectiveStyle.fontSize))
+        undoButton.isEnabled = canvas.store.undoManager.canUndo
+        redoButton.isEnabled = canvas.store.undoManager.canRedo
+        deleteButton.isEnabled = canvas.selectedAnnotation != nil
         panel.setContentSize(panel.contentView?.fittingSize ?? panel.frame.size)
+        reposition()
     }
 
     // MARK: - Actions
@@ -140,6 +182,7 @@ final class AnnotationToolbar: AttachedToolbar {
     @objc private func widthChanged() {
         guard let canvas else { return }
         let width = widthSlider.doubleValue
+        canvas.commitTextEditor()
         if canvas.selectedAnnotation == nil { Preferences.shared.annotationLineWidth = width }
         canvas.updateSelectedStyle { $0.lineWidth = CGFloat(width) }
     }
@@ -155,12 +198,27 @@ final class AnnotationToolbar: AttachedToolbar {
         canvas?.updateSelectedStyle { $0.fontSize = value }
     }
 
-    @objc private func undo() { canvas?.store.undoManager.undo(); canvas?.needsDisplay = true }
-    @objc private func redo() { canvas?.store.undoManager.redo(); canvas?.needsDisplay = true }
+    @objc private func undo() { canvas?.commitTextEditor(); canvas?.store.undoManager.undo(); syncSelection() }
+    @objc private func redo() { canvas?.store.undoManager.redo(); syncSelection() }
+    @objc private func duplicate() { canvas?.duplicateSelection() }
     @objc private func deleteSelection() { canvas?.deleteSelection() }
     @objc private func resetAll() {
+        canvas?.commitTextEditor()
         canvas?.store.reset()
         pin?.refreshAfterStoreChange()
     }
     @objc private func finish() { pin?.endEditing() }
+}
+
+/// AppKit tracks a slider within mouseDown; bracket that entire gesture so
+/// continuous style updates undo together, just like canvas drags.
+private final class AnnotationWidthSlider: NSSlider {
+    var undoManagerForGesture: (() -> UndoManager?)?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        let manager = undoManagerForGesture?()
+        manager?.beginUndoGrouping()
+        defer { manager?.endUndoGrouping() }
+        super.mouseDown(with: event)
+    }
 }

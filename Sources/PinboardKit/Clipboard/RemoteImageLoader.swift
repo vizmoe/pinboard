@@ -1,30 +1,32 @@
 import AppKit
+import SafeImageDownload
 
-/// Loads the bytes of an image referenced by pasted HTML.
-///
-/// Completions are always delivered on the main thread. Tests inject their own
-/// conformance so no test ever touches the network.
 protocol RemoteImageFetching {
-    /// Fetches `url`; `completion(nil)` covers every failure — bad status,
-    /// transport error, oversized payload.
+    /// Main-thread completion. nil means the image is unavailable; the display
+    /// boundary deliberately keeps alt text while canonical source stays intact.
     func fetch(_ url: URL, completion: @escaping (Data?) -> Void)
 }
 
-/// Production loader. A pasted message must not hang on a dead host, so the
-/// request times out quickly, and a single oversized asset is discarded rather
-/// than kept in memory.
-///
-/// Successful downloads are cached for the session: re-rendering a Markdown
-/// pin (ending an edit, switching modes) must not hit the network again.
-///
-/// The session is ephemeral and never sends cookies: a copied URL may point at
-/// a host the user is signed in to, and pasting a message must not leak that
-/// session to a third-party CDN.
+/// Bounded image downloads. DNS answers are validated at socket creation (also
+/// after redirects), never by a racy preflight lookup. No cookies, credentials
+/// or environment proxies are used. The byte limit is enforced while receiving.
 final class RemoteImageLoader: RemoteImageFetching {
     static let shared = RemoteImageLoader()
 
-    let session: URLSession
+    struct DownloadError: Error {
+        let code: Int32
+    }
+
     private let maximumBytes: Int
+    private let download: (URL, Int) throws -> Data
+    private let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Pinboard image downloads"
+        queue.maxConcurrentOperationCount = 4
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
+    private var pending: [URL: [(Data?) -> Void]] = [:]
     private let cache: NSCache<NSURL, NSData> = {
         let cache = NSCache<NSURL, NSData>()
         cache.countLimit = 64
@@ -32,23 +34,29 @@ final class RemoteImageLoader: RemoteImageFetching {
         return cache
     }()
 
-    init(maximumBytes: Int = 20 * 1024 * 1024) {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpShouldSetCookies = false
-        configuration.timeoutIntervalForRequest = 8
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        session = URLSession(configuration: configuration)
+    init(maximumBytes: Int = 20 * 1024 * 1024,
+         download: @escaping (URL, Int) throws -> Data = RemoteImageLoader.download) {
+        precondition(maximumBytes > 0)
         self.maximumBytes = maximumBytes
+        self.download = download
     }
 
-    /// Test seam: any custom session can be injected.
-    init(session: URLSession, maximumBytes: Int = 20 * 1024 * 1024) {
-        self.session = session
-        self.maximumBytes = maximumBytes
+    private static func download(_ url: URL, limit: Int) throws -> Data {
+        var bytes: UnsafeMutablePointer<UInt8>?
+        var length = 0
+        let code = pinboard_download_image(url.absoluteString, limit, &bytes, &length)
+        guard code == 0 else { throw DownloadError(code: code) }
+        guard let bytes else { return Data() }
+        return Data(bytesNoCopy: bytes, count: length, deallocator: .free)
     }
 
     func fetch(_ url: URL, completion: @escaping (Data?) -> Void) {
-        guard url.scheme == "http" || url.scheme == "https" else {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.fetch(url, completion: completion) }
+            return
+        }
+        guard ["http", "https"].contains(url.scheme?.lowercased()),
+              url.host != nil, url.user == nil, url.password == nil else {
             completion(nil)
             return
         }
@@ -56,18 +64,43 @@ final class RemoteImageLoader: RemoteImageFetching {
             completion(cached as Data)
             return
         }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 8
-        let cache = self.cache
-        session.dataTask(with: request) { [maximumBytes] data, response, error in
-            var result: Data?
-            if error == nil,
-               let http = response as? HTTPURLResponse, http.statusCode == 200,
-               let data, data.count <= maximumBytes {
-                result = data
-                cache.setObject(data as NSData, forKey: url as NSURL, cost: data.count)
+        if pending[url] != nil {
+            // Re-renders share a request instead of spawning duplicate work.
+            guard pending[url]!.count < 64 else {
+                NSLog("Pinboard image request has too many waiting displays")
+                completion(nil)
+                return
             }
-            DispatchQueue.main.async { completion(result) }
-        }.resume()
+            pending[url]!.append(completion)
+            return
+        }
+        guard pending.count < 64 else {
+            NSLog("Pinboard image queue is full")
+            completion(nil)
+            return
+        }
+        pending[url] = [completion]
+        queue.addOperation { [self] in
+            let result: Result<Data, Error> = Result {
+                let data = try download(url, maximumBytes)
+                guard data.count <= maximumBytes else { throw DownloadError(code: 63) }
+                return data
+            }
+            DispatchQueue.main.async { [self] in
+                let data: Data?
+                switch result {
+                case .success(let bytes):
+                    cache.setObject(bytes as NSData, forKey: url as NSURL, cost: bytes.count)
+                    data = bytes
+                case .failure(let error):
+                    // Display-only recovery: callers show alt text; history and
+                    // the Markdown source keep the URL for a later retry.
+                    NSLog("Pinboard image download failed: %@", String(describing: error))
+                    data = nil
+                }
+                let callbacks = pending.removeValue(forKey: url)!
+                callbacks.forEach { $0(data) }
+            }
+        }
     }
 }

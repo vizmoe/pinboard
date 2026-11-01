@@ -4,20 +4,20 @@ import Foundation
 ///
 /// `richText` is the original RTF-faithful mode. `plainText` drops all
 /// formatting and shows the text in the default font. `markdown` keeps the raw
-/// Markdown source as canonical content and renders it for display; clicking a
-/// Markdown pin edits that source.
+/// Markdown source as canonical content and renders it for display; the Edit
+/// action opens that source.
 enum TextContentMode: String, Codable, CaseIterable, Identifiable {
     case richText
-    case plainText
     case markdown
+    case plainText
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .richText: return "Rich Text"
+        case .richText: return "Rich Text Format"
+        case .markdown: return "GitHub Flavored Markdown"
         case .plainText: return "Plain Text"
-        case .markdown: return "Markdown"
         }
     }
 }
