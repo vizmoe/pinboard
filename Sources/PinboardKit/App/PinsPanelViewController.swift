@@ -136,7 +136,10 @@ final class PinsPanelViewController: NSViewController {
         listHeight = min(max(height, 144), 376)
         let size = NSSize(width: Self.width, height: listHeight + 159)
         preferredContentSize = size
-        view.setFrameSize(size)
+        // AppKit sizes an attached page from preferredContentSize. Setting its
+        // frame here turns the old height difference into an autoresizing margin
+        // and prevents the surrounding popover from shrinking.
+        if view.superview == nil { view.setFrameSize(size) }
         layoutContent()
         view.layoutSubtreeIfNeeded()
         let y = min(previousOrigin.y, max(0, document.bounds.height - scrollView.contentSize.height))

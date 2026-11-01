@@ -56,6 +56,68 @@ final class StatusPanelTests: XCTestCase {
         XCTAssertFalse(controller.popover.isShown)
     }
 
+    func testPopoverShrinksWhenReturningFromHistory() throws {
+        anchor.performClick(nil)
+        try assertPopoverFitsActivePage("initial-pins")
+        try clickVisible("History")
+        try assertPopoverFitsActivePage("history")
+        try clickVisible("Pins")
+        try assertPopoverFitsActivePage("returned-pins")
+    }
+
+    func testPopoverFitsRepeatedNavigationReopeningAndLiveListChanges() throws {
+        anchor.performClick(nil)
+        for cycle in 0..<3 {
+            for index in 0..<8 {
+                _ = manager.createPin(content: .text(NSAttributedString(string: "Pin \(index)")), textMode: .plainText)
+            }
+            try assertPopoverFitsActivePage("grown-pins-\(cycle)")
+            try clickVisible("History")
+            try assertPopoverFitsActivePage("shorter-history-\(cycle)")
+            manager.closeAll()
+            try assertPopoverFitsActivePage("history-after-inactive-pins-change-\(cycle)")
+            try clickVisible("Pins")
+            try assertPopoverFitsActivePage("empty-pins-\(cycle)")
+            anchor.performClick(nil)
+            anchor.performClick(nil)
+            try assertPopoverFitsActivePage("reopened-pins-\(cycle)")
+            for index in 0..<4 {
+                _ = manager.createPin(content: .text(NSAttributedString(string: "Pin \(index)")), textMode: .plainText)
+            }
+            try assertPopoverFitsActivePage("regrown-pins-\(cycle)")
+            try clickVisible("Close All")
+            try assertPopoverFitsActivePage("closed-all-pins-\(cycle)")
+        }
+    }
+
+    private func assertPopoverFitsActivePage(_ name: String,
+                                            file: StaticString = #filePath, line: UInt = #line) throws {
+        flushUpdates()
+        let page = try XCTUnwrap(controller.popover.contentViewController, file: file, line: line)
+        let window = try XCTUnwrap(page.view.window, file: file, line: line)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let expected = page.preferredContentSize
+        let pageInWindow = page.view.convert(page.view.bounds, to: nil)
+        let topInset = window.frame.height - pageInWindow.maxY
+        if let path = ProcessInfo.processInfo.environment["PINBOARD_TEST_ARTIFACTS"],
+           let frameView = window.contentView?.superview {
+            let directory = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let rep = try XCTUnwrap(frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds))
+            frameView.cacheDisplay(in: frameView.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+                .write(to: directory.appendingPathComponent("popover-\(name).png"))
+        }
+        XCTAssertEqual(controller.popover.contentSize.height, expected.height, accuracy: 1,
+                       "\(name): the outer popover must fit the active page", file: file, line: line)
+        XCTAssertEqual(page.view.bounds.size, expected,
+                       "\(name): the active page must not be stretched or clipped", file: file, line: line)
+        XCTAssertLessThanOrEqual(window.frame.height - expected.height, 40,
+                                 "\(name): only native border/arrow space may surround the page", file: file, line: line)
+        XCTAssertLessThanOrEqual(topInset, 32,
+                                 "\(name): unexpected blank space above the page (\(topInset) pt)", file: file, line: line)
+    }
+
     func testPanelUsesCompactIconControlsWithAccessibleHelp() throws {
         controller.pinsViewController.reloadPins()
         let view = controller.pinsViewController.view
