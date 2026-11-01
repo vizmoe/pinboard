@@ -12,12 +12,13 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
 - **Pin the clipboard** — one action converts text, RTF, or an image into a
   borderless always-on-top window. Multiple pins coexist independently.
 - **Pins panel in the menu bar** — click the status icon to see all current
-  pins with content previews and Visible/Hidden labels. Use **Show**, **Hide**
-  or **Close** on an individual pin, or **Show All**, **Hide All** and **Close All**
-  below the **Pins** heading. The list stays open and updates after actions;
-  long lists scroll while bulk controls remain visible. Closing a pin keeps
-  its saved history. Click outside, press Escape or click the icon again to
-  dismiss the panel. Pin Clipboard, History, Settings and Quit are at the bottom.
+  pins with content previews and Visible/Hidden labels. The eye, crossed eye
+  and close icons beside the count act on all pins; the icons inside a card act
+  on that pin. Closing a pin keeps its saved history. The pin and history icons
+  at the top switch pages in the same panel, and the plus icon pins the clipboard.
+  Settings and Quit stay at the bottom while long lists scroll. Hover an action
+  for its name; every icon also has an accessibility label. Click outside, press
+  Escape or click the status icon again to dismiss the panel.
 - **Quick actions** — new pins appear at the pointer, clamped to the screen.
   Double-click an idle pin to copy its content and close it. Use the pencil or
   context menu to edit; double-click within an active editor keeps its normal

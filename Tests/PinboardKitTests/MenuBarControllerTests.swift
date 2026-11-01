@@ -31,7 +31,7 @@ final class MenuBarControllerTests: XCTestCase {
     }
 
     private func button(_ title: String) throws -> NSButton {
-        try XCTUnwrap(descendants(panel.view).compactMap { $0 as? NSButton }.first { $0.title == title })
+        try XCTUnwrap(descendants(panel.view).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == title })
     }
 
     private func bitmap(_ image: NSImage) throws -> NSBitmapImageRep {

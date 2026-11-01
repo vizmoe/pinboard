@@ -56,6 +56,22 @@ final class StatusPanelTests: XCTestCase {
         XCTAssertFalse(controller.popover.isShown)
     }
 
+    func testPanelUsesCompactIconControlsWithAccessibleHelp() throws {
+        controller.pinsViewController.reloadPins()
+        let view = controller.pinsViewController.view
+        view.layoutSubtreeIfNeeded()
+        XCTAssertLessThanOrEqual(view.frame.width, 400)
+        for button in buttons(in: view) {
+            XCTAssertTrue(button.title.isEmpty, "Actions should use icons: \(button.title)")
+            XCTAssertNotNil(button.image)
+            XCTAssertEqual(button.imagePosition, .imageOnly)
+            XCTAssertFalse(button.toolTip?.isEmpty ?? true)
+            XCTAssertFalse(button.accessibilityLabel()?.isEmpty ?? true)
+            XCTAssertGreaterThanOrEqual(button.frame.width, 28)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 28)
+        }
+    }
+
     func testOpenPanelTracksExternalChangesAndKeepsOpenAfterPinActions() throws {
         let first = manager.createPin(content: .text(NSAttributedString(string: "first")), textMode: .plainText)
         anchor.performClick(nil)
@@ -101,12 +117,12 @@ final class StatusPanelTests: XCTestCase {
         anchor.target = controller
         anchor.performClick(nil)
         let window = controller.pinsViewController.view.window
-        try XCTUnwrap(buttons(in: controller.pinsViewController.view).first { $0.title == "History" }).performClick(nil)
+        try XCTUnwrap(buttons(in: controller.pinsViewController.view).first { $0.identifier?.rawValue == "History" }).performClick(nil)
         XCTAssertTrue(controller.popover.isShown)
         let history = try XCTUnwrap(controller.popover.contentViewController)
         XCTAssertFalse(history === controller.pinsViewController)
         XCTAssertTrue(history.view.window === window)
-        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Settings" }).performClick(nil)
+        try XCTUnwrap(buttons(in: history.view).first { $0.identifier?.rawValue == "Settings" }).performClick(nil)
         XCTAssertEqual(settings, 1)
         XCTAssertFalse(controller.popover.isShown)
     }
@@ -121,6 +137,32 @@ final class StatusPanelTests: XCTestCase {
             charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
         window.sendEvent(escape)
         XCTAssertFalse(controller.popover.isShown)
+    }
+
+    func testEscapeFromHistorySearchDismissesThePopover() throws {
+        anchor.performClick(nil)
+        try clickVisible("History")
+        let history = try XCTUnwrap(controller.historyViewController)
+        let window = try XCTUnwrap(history.view.window)
+        window.makeFirstResponder(history.searchField)
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        window.sendEvent(escape)
+        XCTAssertFalse(controller.popover.isShown)
+    }
+
+    func testPinPreviewsRefreshWhenPanelAppearanceChanges() throws {
+        _ = manager.createPin(content: .text(NSAttributedString(string: "Appearance preview")), textMode: .plainText)
+        anchor.performClick(nil)
+        let pins = controller.pinsViewController
+        pins.view.appearance = NSAppearance(named: .aqua)
+        flushUpdates()
+        let light = try XCTUnwrap(pins.rows.first?.previewView.image?.pngData())
+        pins.view.appearance = NSAppearance(named: .darkAqua)
+        flushUpdates()
+        XCTAssertNotEqual(light, pins.rows.first?.previewView.image?.pngData())
+        XCTAssertEqual(manager.count, 1)
     }
 
     func testHistoryActionsAndReturnUseOnePopoverWindow() throws {
@@ -139,22 +181,132 @@ final class StatusPanelTests: XCTestCase {
         anchor.target = controller
         anchor.performClick(nil)
         let window = controller.pinsViewController.view.window
-        try XCTUnwrap(buttons(in: controller.pinsViewController.view).first { $0.title == "History" }).performClick(nil)
+        try XCTUnwrap(buttons(in: controller.pinsViewController.view).first { $0.identifier?.rawValue == "History" }).performClick(nil)
         let history = try XCTUnwrap(controller.historyViewController)
         history.tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         XCTAssertEqual(history.model?.selection, id)
-        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Copy" }).performClick(nil)
+        try XCTUnwrap(buttons(in: history.view).first { $0.identifier?.rawValue == "Copy" }).performClick(nil)
         XCTAssertEqual(pasteboard.string(forType: .string), "Saved note")
-        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Pin Again" }).performClick(nil)
+        try XCTUnwrap(buttons(in: history.view).first { $0.identifier?.rawValue == "Pin Again" }).performClick(nil)
         flushUpdates()
         XCTAssertTrue(controller.popover.isShown)
         XCTAssertTrue(history.view.window === window)
         XCTAssertEqual(manager.count, 1)
-        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Back" }).performClick(nil)
-        try XCTUnwrap(buttons(in: history.view).first { $0.title == "Pins" }).performClick(nil)
+        try XCTUnwrap(buttons(in: history.view).first { $0.identifier?.rawValue == "Back" }).performClick(nil)
+        try XCTUnwrap(buttons(in: history.view).first { $0.identifier?.rawValue == "Pins" }).performClick(nil)
         XCTAssertTrue(controller.popover.contentViewController === controller.pinsViewController)
         XCTAssertEqual(controller.pinsViewController.rows.count, 1)
         XCTAssertTrue(controller.popover.isShown)
+    }
+
+    func testMenuBarStatesRenderInLightAndDarkAppearance() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let originalAppearance = NSApp.appearance
+        defer {
+            controller.popover.close()
+            manager.closeAll()
+            manager.historyStore = nil
+            NSApp.appearance = originalAppearance
+            try? FileManager.default.removeItem(at: directory)
+        }
+        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            controller.popover.close()
+            manager.closeAll()
+            NSApp.appearance = NSAppearance(named: appearance)
+            let store = HistoryStore(directory: directory.appendingPathComponent(name))
+            manager.historyStore = store
+            controller = MenuBarController(manager: manager, onOpenSettings: {})
+            anchor.target = controller
+            anchor.performClick(nil)
+            try capture("empty-pins-\(name)")
+            try clickVisible("History")
+            let history = try XCTUnwrap(controller.historyViewController)
+            try capture("empty-history-\(name)")
+            let textID = try store.upsert(content: .text(NSAttributedString(string:
+                "# Release checklist\n\n- Verify the menu bar\n- Preview saved content\n\n**Ready to ship.**")), textMode: .markdown)
+            let picture = ImagePinView(image: TestImage.make(width: 400, height: 240, color: .systemTeal))
+            picture.annotationStore.add(Annotation(tool: .arrow,
+                points: [CGPoint(x: 60, y: 60), CGPoint(x: 310, y: 175)],
+                style: AnnotationStyle(colorHex: "#FFFFFF", lineWidth: 6, fontSize: 18)))
+            let state = picture.captureState()
+            let imageID = try store.upsert(content: state.content, annotationData: state.annotationData)
+            _ = try store.upsert(content: .text(NSAttributedString(string: String(repeating: "设计笔记 👩🏽‍💻 A long title ", count: 8))))
+            try capture("history-\(name)")
+            history.searchField.stringValue = "checklist"
+            history.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: history.searchField))
+            XCTAssertEqual(history.records.map(\.id), [textID])
+            try capture("search-\(name)")
+            history.tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            try capture("text-detail-\(name)")
+            try clickVisible("Back")
+            history.searchField.stringValue = "no-match"
+            history.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: history.searchField))
+            try capture("empty-search-\(name)")
+            history.searchField.stringValue = ""
+            history.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: history.searchField))
+            history.tableView.selectRowIndexes(IndexSet(integer: try XCTUnwrap(history.records.firstIndex { $0.id == imageID })), byExtendingSelection: false)
+            try capture("image-detail-\(name)")
+            try clickVisible("Back")
+            try clickVisible("Clear History")
+            try capture("clear-confirmation-\(name)")
+            try clickVisible("Cancel")
+            try clickVisible("Pins")
+            _ = manager.createPin(content: .text(NSAttributedString(string: "Meeting notes\nShip the menu bar update")), textMode: .plainText)
+            let imagePin = manager.createPin(content: .image(TestImage.make(width: 400, height: 240, color: .systemTeal)))
+            imagePin.hidePin()
+            flushUpdates()
+            try capture("pins-\(name)")
+            for index in 0..<12 {
+                _ = manager.createPin(content: .text(NSAttributedString(string: "\(index) · " + String(repeating: "Long title 中文 👩🏽‍💻 ", count: 12))), textMode: .plainText)
+            }
+            flushUpdates()
+            let pins = controller.pinsViewController
+            pins.scrollView.contentView.scroll(to: NSPoint(x: 0, y: 180))
+            try capture("long-pins-\(name)")
+            XCTAssertLessThanOrEqual(pins.view.bounds.height, 560)
+            try clickVisible("History")
+            history.scrollView.contentView.scroll(to: NSPoint(x: 0, y: 100))
+            try capture("long-history-\(name)")
+            let origin = history.scrollView.contentView.bounds.origin.y
+            try store.upsert(id: textID, content: .text(NSAttributedString(string: "Updated while open")))
+            XCTAssertEqual(history.scrollView.contentView.bounds.origin.y, origin, accuracy: 1)
+        }
+    }
+
+    private func clickVisible(_ identifier: String) throws {
+        let root = try XCTUnwrap(controller.popover.contentViewController?.view)
+        try XCTUnwrap(buttons(in: root).first { $0.identifier?.rawValue == identifier && !$0.isHiddenOrHasHiddenAncestor }).performClick(nil)
+    }
+
+    private func capture(_ name: String) throws {
+        flushUpdates()
+        XCTAssertTrue(controller.popover.isShown)
+        let view = try XCTUnwrap(controller.popover.contentViewController?.view)
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        // NSSearchField owns native search/cancel buttons with internal cell
+        // titles. The app's navigation and action controls are PanelIconButton.
+        let actions = buttons(in: view).compactMap { $0 as? PanelIconButton }
+        XCTAssertGreaterThanOrEqual(actions.count, 5)
+        for button in actions where !button.isHiddenOrHasHiddenAncestor {
+            XCTAssertTrue(button.title.isEmpty, "\(name): \(type(of: button)), title=\(button.title)")
+            XCTAssertNotNil(button.image)
+            XCTAssertFalse(button.toolTip?.isEmpty ?? true, "\(name): \(type(of: button)), title=\(button.title)")
+            XCTAssertFalse(button.accessibilityLabel()?.isEmpty ?? true)
+            if button.enclosingScrollView == nil {
+                XCTAssertTrue(view.bounds.contains(button.convert(button.bounds, to: view)), "\(name): \(button.identifier?.rawValue ?? "")")
+            }
+        }
+        let navigation = buttons(in: view).filter { ["Pins", "History"].contains($0.identifier?.rawValue ?? "") }
+        XCTAssertEqual(navigation.filter { $0.state == .on }.count, 1)
+        if let path = ProcessInfo.processInfo.environment["PINBOARD_TEST_ARTIFACTS"] {
+            let directory = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+                .write(to: directory.appendingPathComponent("\(name).png"))
+        }
     }
 
     func testPanelSnapshotHasVisibleControlsAndPreviews() throws {
