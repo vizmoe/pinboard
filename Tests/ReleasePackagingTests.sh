@@ -6,29 +6,59 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TAG="${1:?usage: ReleasePackagingTests.sh vVERSION ARCH [DIST_DIR]}"
 ARCH="${2:?expected architecture is required}"
 DIST="${3:-$ROOT/dist}"
-NAME="Pinboard-${TAG#v}-macos-$ARCH.zip"
+NAME="Pinboard-${TAG#v}-macos-$ARCH.dmg"
 
-test -f "$DIST/$NAME" || { echo "Missing release archive: $DIST/$NAME" >&2; exit 1; }
+test -f "$DIST/$NAME" || { echo "Missing release DMG: $DIST/$NAME" >&2; exit 1; }
 (cd "$DIST" && shasum -a 256 -c "$NAME.sha256")
+hdiutil verify "$DIST/$NAME"
 
-EXTRACTED="$(mktemp -d)"
-trap 'rm -rf "$EXTRACTED"' EXIT
-ditto -x -k "$DIST/$NAME" "$EXTRACTED"
-APP="$EXTRACTED/Pinboard.app"
+WORK="$(mktemp -d)"
+VOLUME="$WORK/volume"
+MOUNTED=false
+cleanup() {
+    RESULT=$?
+    trap - EXIT
+    if [[ "$MOUNTED" == true ]]; then
+        if ! hdiutil detach "$VOLUME" -quiet; then
+            echo "Could not detach test volume: $VOLUME" >&2
+            exit 1
+        fi
+    fi
+    rm -rf "$WORK"
+    exit "$RESULT"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+hdiutil imageinfo -plist "$DIST/$NAME" > "$WORK/image-info.plist"
+test "$(/usr/libexec/PlistBuddy -c 'Print :Format' "$WORK/image-info.plist")" = UDZO
+mkdir -p "$VOLUME"
+hdiutil attach -readonly -nobrowse -mountpoint "$VOLUME" "$DIST/$NAME" -quiet
+MOUNTED=true
+test -L "$VOLUME/Applications"
+test "$(readlink "$VOLUME/Applications")" = /Applications
+codesign --verify --deep --strict "$VOLUME/Pinboard.app"
+
+# Exercise the install copy without replacing the user's installed app.
+APP="$WORK/installed/Pinboard.app"
+ditto "$VOLUME/Pinboard.app" "$APP"
 test -x "$APP/Contents/MacOS/Pinboard"
 test -s "$APP/Contents/Resources/ThirdPartyNotices.txt"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "${TAG#v}"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = "com.shiro.pinboard"
 test "$(lipo -archs "$APP/Contents/MacOS/Pinboard")" = "$ARCH"
 codesign --verify --deep --strict "$APP"
+hdiutil detach "$VOLUME" -quiet
+MOUNTED=false
 
 # Invalid tags must fail at the version boundary, not during a later build.
 for INVALID in '' v999.999.999 v01.0.0 v0.1 0.1.0 v0.1.0-beta '../invalid'; do
-    if "$ROOT/scripts/package-release.sh" "$INVALID" > "$EXTRACTED/invalid.log" 2>&1; then
+    if "$ROOT/scripts/package-release.sh" "$INVALID" > "$WORK/invalid.log" 2>&1; then
         echo "Invalid release tag was accepted: $INVALID" >&2
         exit 1
     fi
-    grep -q 'error: release tag' "$EXTRACTED/invalid.log"
+    grep -q 'error: release tag' "$WORK/invalid.log"
 done
 
-echo "Release archive, metadata, signature, architecture, and tag rejection checks passed: $NAME"
+echo "DMG mount, install copy, metadata, signature, architecture, and tag rejection checks passed: $NAME"
