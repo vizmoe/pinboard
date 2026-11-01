@@ -14,16 +14,16 @@ final class PinsPanelViewController: NSViewController {
     let countLabel = NSTextField(labelWithString: "")
     private let document = FlippedView()
     private let emptyView = NSStackView()
-    private let header = NSStackView()
+    private let header = MenuBarPanelHeader(title: "Pins", showingHistory: false)
     private let bulk = NSStackView()
     private let separator = NSBox()
-    private let footer = NSStackView()
+    private let footer = MenuBarPanelFooter()
     private var listHeight: CGFloat = 136
     private var showAllButton: NSButton!
     private var hideAllButton: NSButton!
     private var closeAllButton: NSButton!
-    private static let width: CGFloat = 448
-    private static let rowHeight: CGFloat = 112
+    private static let width: CGFloat = 380
+    private static let rowHeight: CGFloat = 88
     private static let rowSpacing: CGFloat = 8
 
     init(manager: PinWindowManager) {
@@ -39,20 +39,19 @@ final class PinsPanelViewController: NSViewController {
         root.onLayout = { [weak self] in self?.layoutContent() }
         root.onDismiss = { [weak self] in self?.onDismiss?() }
         view = root
-        let title = NSTextField(labelWithString: "Pins")
-        title.font = .systemFont(ofSize: 18, weight: .semibold)
-        countLabel.font = .systemFont(ofSize: 12)
+        countLabel.font = .systemFont(ofSize: 11)
         countLabel.textColor = .secondaryLabelColor
-        header.addArrangedSubview(title)
-        header.addArrangedSubview(countLabel)
-        header.spacing = 10
-        header.alignment = .firstBaseline
+        header.onPins = { [weak self] in self?.reloadPins() }
+        header.onHistory = { [weak self] in self?.onUtilityAction?(.history) }
+        header.onPaste = { [weak self] in self?.onUtilityAction?(.paste) }
+        footer.onSettings = { [weak self] in self?.onUtilityAction?(.settings) }
+        footer.onQuit = { [weak self] in self?.onUtilityAction?(.quit) }
 
         showAllButton = button("Show All", symbol: "eye", action: #selector(showAll))
         hideAllButton = button("Hide All", symbol: "eye.slash", action: #selector(hideAll))
         closeAllButton = button("Close All", symbol: "xmark", action: #selector(closeAll))
         [showAllButton, hideAllButton, closeAllButton].forEach { bulk.addArrangedSubview($0!) }
-        bulk.spacing = 8
+        bulk.spacing = 4
         bulk.distribution = .fillEqually
 
         scrollView.drawsBackground = false
@@ -65,35 +64,33 @@ final class PinsPanelViewController: NSViewController {
 
         emptyView.orientation = .vertical
         emptyView.spacing = 8
+        let emptyIcon = NSImageView()
+        emptyIcon.image = NSImage(systemSymbolName: "pin", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 28, weight: .light))
+        emptyIcon.contentTintColor = .tertiaryLabelColor
+        emptyView.addArrangedSubview(emptyIcon)
         let emptyTitle = NSTextField(labelWithString: "No Pins")
         emptyTitle.font = .systemFont(ofSize: 15, weight: .medium)
-        let emptyHint = NSTextField(labelWithString: "Pin clipboard content to get started.")
+        let emptyHint = NSTextField(labelWithString: "Pin something from your clipboard.")
         emptyHint.font = .systemFont(ofSize: 12)
         emptyHint.textColor = .secondaryLabelColor
         emptyView.addArrangedSubview(emptyTitle)
         emptyView.addArrangedSubview(emptyHint)
 
         separator.boxType = .separator
-        [
-            button("Pin Clipboard", symbol: "plus", action: #selector(paste)),
-            button("History", action: #selector(history)),
-            button("Settings", action: #selector(settings)),
-            button("Quit", action: #selector(quit))
-        ].forEach { footer.addArrangedSubview($0) }
-        footer.spacing = 8
-        footer.distribution = .fillProportionally
-
-        for child in [header, bulk, scrollView, emptyView, separator, footer] { root.addSubview(child) }
+        for child in [header, countLabel, bulk, scrollView, emptyView, separator, footer] { root.addSubview(child) }
+        root.onAppearanceChange = { [weak self] in self?.reloadPins() }
     }
 
     private func layoutContent() {
         let width = view.bounds.width
-        header.frame = NSRect(x: 16, y: 16, width: width - 32, height: 24)
-        bulk.frame = NSRect(x: 16, y: 52, width: width - 32, height: 24)
-        scrollView.frame = NSRect(x: 12, y: 88, width: width - 24, height: listHeight)
-        emptyView.frame = NSRect(x: 16, y: 88 + (listHeight - 44) / 2, width: width - 32, height: 44)
-        separator.frame = NSRect(x: 16, y: 100 + listHeight, width: width - 32, height: 1)
-        footer.frame = NSRect(x: 16, y: 111 + listHeight, width: width - 32, height: 24)
+        header.frame = NSRect(x: 16, y: 14, width: width - 32, height: 32)
+        countLabel.frame = NSRect(x: 16, y: 63, width: width - 148, height: 18)
+        bulk.frame = NSRect(x: width - 116, y: 54, width: 100, height: 32)
+        scrollView.frame = NSRect(x: 12, y: 96, width: width - 24, height: listHeight)
+        emptyView.frame = NSRect(x: 16, y: 96 + (listHeight - 92) / 2, width: width - 32, height: 92)
+        separator.frame = NSRect(x: 16, y: 108 + listHeight, width: width - 32, height: 1)
+        footer.frame = NSRect(x: 16, y: 117 + listHeight, width: width - 32, height: 32)
         let height = CGFloat(rows.count) * (Self.rowHeight + Self.rowSpacing) - (rows.isEmpty ? 0 : Self.rowSpacing)
         document.setFrameSize(NSSize(width: scrollView.contentSize.width, height: max(height, listHeight)))
         for (index, row) in rows.enumerated() {
@@ -122,9 +119,11 @@ final class PinsPanelViewController: NSViewController {
                 self?.perform(action, for: id)
             }
             if row.superview == nil { document.addSubview(row) }
-            row.update(from: pin)
+            view.effectiveAppearance.performAsCurrentDrawingAppearance { row.update(from: pin) }
             return row
         }
+        header.pinsButton.state = .on
+        header.historyButton.state = .off
         let count = manager.count
         countLabel.stringValue = "\(count) total · \(manager.visibleCount) visible"
         showAllButton.isEnabled = count > 0
@@ -134,8 +133,8 @@ final class PinsPanelViewController: NSViewController {
         scrollView.isHidden = count == 0
 
         let height = CGFloat(count) * (Self.rowHeight + Self.rowSpacing) - (count > 0 ? Self.rowSpacing : 0)
-        listHeight = min(max(height, 136), 472)
-        let size = NSSize(width: Self.width, height: listHeight + 147)
+        listHeight = min(max(height, 144), 376)
+        let size = NSSize(width: Self.width, height: listHeight + 159)
         preferredContentSize = size
         view.setFrameSize(size)
         layoutContent()
@@ -157,43 +156,13 @@ final class PinsPanelViewController: NSViewController {
         reloadPins()
     }
 
-    private func button(_ title: String, symbol: String? = nil, action: Selector) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
-        button.bezelStyle = .rounded
-        button.isBordered = false
-        button.contentTintColor = .labelColor
-        button.controlSize = .small
-        button.font = .systemFont(ofSize: 12)
-        if let symbol {
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-            button.imagePosition = .imageLeft
-        }
-        button.setAccessibilityLabel(title)
-        return button
+    private func button(_ title: String, symbol: String, action: Selector) -> NSButton {
+        PanelIconButton(title, symbol: symbol, target: self, action: action)
     }
 
     @objc private func showAll() { manager.showAll(); reloadPins() }
     @objc private func hideAll() { manager.hideAll(); reloadPins() }
     @objc private func closeAll() { manager.closeAll(); reloadPins() }
-    @objc private func paste() { onUtilityAction?(.paste) }
-    @objc private func history() { onUtilityAction?(.history) }
-    @objc private func settings() { onUtilityAction?(.settings) }
-    @objc private func quit() { onUtilityAction?(.quit) }
-}
-
-final class MenuBarPanelRootView: NSView {
-    var onLayout: (() -> Void)?
-    var onDismiss: (() -> Void)?
-    override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { true }
-    override func keyDown(with event: NSEvent) { interpretKeyEvents([event]) }
-    override func cancelOperation(_ sender: Any?) { onDismiss?() }
-    override func insertTab(_ sender: Any?) { window?.selectNextKeyView(sender) }
-    override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(sender) }
-    override func layout() {
-        super.layout()
-        onLayout?()
-    }
 }
 
 private final class FlippedView: NSView {
@@ -205,15 +174,15 @@ final class PinRowView: NSView {
     let previewView = NSImageView()
     let titleLabel = NSTextField(wrappingLabelWithString: "")
     let visibilityLabel = NSTextField(labelWithString: "")
-    let showButton = NSButton(title: "Show", target: nil, action: nil)
-    let hideButton = NSButton(title: "Hide", target: nil, action: nil)
-    let closeButton = NSButton(title: "Close", target: nil, action: nil)
+    let showButton = PanelIconButton("Show", symbol: "eye")
+    let hideButton = PanelIconButton("Hide", symbol: "eye.slash")
+    let closeButton = PanelIconButton("Close", symbol: "xmark")
     private let onAction: (PinsPanelViewController.PinAction, UUID) -> Void
 
     init(pinID: UUID, onAction: @escaping (PinsPanelViewController.PinAction, UUID) -> Void) {
         self.pinID = pinID
         self.onAction = onAction
-        super.init(frame: NSRect(x: 0, y: 0, width: 424, height: 112))
+        super.init(frame: NSRect(x: 0, y: 0, width: 356, height: 88))
         wantsLayer = true
         layer?.cornerRadius = 9
         previewView.imageScaling = .scaleProportionallyUpOrDown
@@ -226,14 +195,11 @@ final class PinRowView: NSView {
         visibilityLabel.font = .systemFont(ofSize: 11)
         visibilityLabel.textColor = .secondaryLabelColor
         for (button, selector) in [(showButton, #selector(show)), (hideButton, #selector(hide)), (closeButton, #selector(close))] {
-            button.bezelStyle = .rounded
-            button.controlSize = .small
-            button.font = .systemFont(ofSize: 11)
             button.target = self
             button.action = selector
         }
         let actions = NSStackView(views: [showButton, hideButton, closeButton])
-        actions.spacing = 6
+        actions.spacing = 0
         actions.distribution = .fillEqually
         for child in [previewView, titleLabel, visibilityLabel, actions] {
             child.translatesAutoresizingMaskIntoConstraints = false
@@ -242,16 +208,17 @@ final class PinRowView: NSView {
         NSLayoutConstraint.activate([
             previewView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             previewView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            previewView.widthAnchor.constraint(equalToConstant: 124),
-            previewView.heightAnchor.constraint(equalToConstant: 88),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            previewView.widthAnchor.constraint(equalToConstant: 72),
+            previewView.heightAnchor.constraint(equalToConstant: 64),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             titleLabel.leadingAnchor.constraint(equalTo: previewView.trailingAnchor, constant: 12),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            visibilityLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
+            visibilityLabel.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
             visibilityLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            actions.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            actions.widthAnchor.constraint(equalToConstant: 96),
+            actions.heightAnchor.constraint(equalToConstant: 32),
             actions.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
-            actions.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10)
+            actions.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4)
         ])
         setAccessibilityElement(false)
         setAccessibilityRole(.group)
@@ -260,7 +227,7 @@ final class PinRowView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() { layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.65).cgColor }
+    override func updateLayer() { layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.04).cgColor }
 
     func update(from pin: PinWindowController) {
         let title = pin.contentView.previewTitle
@@ -271,7 +238,8 @@ final class PinRowView: NSView {
         previewView.image = pin.contentView.menuPreview(fitting: CGSize(width: 248, height: 176))
         previewView.setAccessibilityLabel("Preview of \(title)")
         for button in [showButton, hideButton, closeButton] {
-            button.setAccessibilityLabel("\(button.title) Pin: \(title)")
+            button.setAccessibilityLabel("\(button.actionName) Pin: \(title)")
+            button.toolTip = "\(button.actionName) Pin"
         }
     }
 

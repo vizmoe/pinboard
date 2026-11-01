@@ -38,7 +38,7 @@ final class HistoryPanelTests: XCTestCase {
     }
 
     private func click(_ title: String) throws {
-        try XCTUnwrap(buttons(panel.view).first { $0.title == title && !$0.isHiddenOrHasHiddenAncestor }).performClick(nil)
+        try XCTUnwrap(buttons(panel.view).first { $0.identifier?.rawValue == title && !$0.isHiddenOrHasHiddenAncestor }).performClick(nil)
     }
 
     private func select(_ id: UUID) throws {
@@ -63,6 +63,8 @@ final class HistoryPanelTests: XCTestCase {
         XCTAssertFalse(panel.detailTextView.string.contains("**Markdown**"))
         let generalRevision = NSPasteboard.general.changeCount
         try click("Copy")
+        XCTAssertEqual(buttons(panel.view).first { $0.identifier?.rawValue == "Copy" }?.state, .off,
+                       "Only navigation icons keep a selected state after an action")
         XCTAssertEqual(pasteboard.string(forType: .string), "# Release notes\nKeep **Markdown** source")
         XCTAssertEqual(NSPasteboard.general.changeCount, generalRevision)
         try click("Pin Again")

@@ -41,7 +41,17 @@ jobs:
           ./scripts/package-release.sh --validate-only "$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - name: Test
+        env:
+          PINBOARD_TEST_ARTIFACTS: ${{ runner.temp }}/pinboard-ui
         run: swift test
+      - name: Retain menu bar render evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: menu-bar-ui-${{ matrix.arch }}
+          path: ${{ runner.temp }}/pinboard-ui/*.png
+          if-no-files-found: warn
+          retention-days: 14
       - name: Package release
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
