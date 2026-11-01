@@ -26,10 +26,13 @@ cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/ThirdPartyNotices.txt" "$APP/Contents/Resources/ThirdPartyNotices.txt"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-if [ -f "$ROOT/Resources/AppIcon.icns" ]; then
-    cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
-    /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$APP/Contents/Info.plist" 2>/dev/null || true
-fi
+ICON_INFO="$ROOT/.build/app-icon-info.plist"
+MINIMUM_MACOS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")"
+xcrun actool "$ROOT/Resources/Assets.xcassets" \
+    --compile "$APP/Contents/Resources" --platform macosx \
+    --minimum-deployment-target "$MINIMUM_MACOS" --app-icon AppIcon \
+    --output-partial-info-plist "$ICON_INFO"
+/usr/libexec/PlistBuddy -c "Merge '$ICON_INFO'" "$APP/Contents/Info.plist"
 
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed"
 

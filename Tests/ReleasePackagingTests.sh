@@ -47,6 +47,24 @@ test -x "$APP/Contents/MacOS/Pinboard"
 test -s "$APP/Contents/Resources/ThirdPartyNotices.txt"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "${TAG#v}"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = "com.shiro.pinboard"
+ICON_FILE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP/Contents/Info.plist")"
+test -s "$APP/Contents/Resources/${ICON_FILE%.icns}.icns"
+iconutil --convert iconset --output "$WORK/AppIcon.iconset" "$APP/Contents/Resources/${ICON_FILE%.icns}.icns"
+test -s "$WORK/AppIcon.iconset/icon_16x16.png"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$APP/Contents/Info.plist")" = AppIcon
+# actool stores the full-resolution renditions in Assets.car; its compatibility
+# ICNS deliberately contains only a subset of the catalog's sizes.
+xcrun assetutil --info "$APP/Contents/Resources/Assets.car" > "$WORK/assets.json"
+python3 - "$WORK/assets.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1]) as source:
+    assets = json.load(source)
+sizes = {asset.get("PixelWidth") for asset in assets
+         if asset.get("Name") == "AppIcon"
+         and asset.get("PixelWidth") == asset.get("PixelHeight")}
+assert {16, 32, 64, 128, 256, 512, 1024} <= sizes, sizes
+PY
 test "$(lipo -archs "$APP/Contents/MacOS/Pinboard")" = "$ARCH"
 codesign --verify --deep --strict "$APP"
 hdiutil detach "$VOLUME" -quiet
