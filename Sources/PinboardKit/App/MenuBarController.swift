@@ -1,18 +1,21 @@
 import AppKit
 
-/// The status item opens one live pins panel. All actions resolve current pin
+/// The status item opens one popover for pins and history. Actions resolve current
 /// identities through the manager, including buttons retained after a close.
 final class MenuBarController: NSObject, NSPopoverDelegate {
     let statusItem: NSStatusItem
     let popover = NSPopover()
     let pinsViewController: PinsPanelViewController
+    private(set) var historyViewController: HistoryPanelViewController?
     private let manager: PinWindowManager
     private var refreshScheduled = false
     private let onOpenSettings: () -> Void
-    var onOpenHistory: (() -> Void)?
+    private let historyPasteboard: NSPasteboard
 
-    init(manager: PinWindowManager, onOpenSettings: @escaping () -> Void) {
+    init(manager: PinWindowManager, historyPasteboard: NSPasteboard = .general,
+         onOpenSettings: @escaping () -> Void) {
         self.manager = manager
+        self.historyPasteboard = historyPasteboard
         self.onOpenSettings = onOpenSettings
         pinsViewController = PinsPanelViewController(manager: manager)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -54,8 +57,31 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     func popoverDidShow(_ notification: Notification) {
-        pinsViewController.view.window?.makeKey()
-        pinsViewController.view.window?.makeFirstResponder(pinsViewController.view)
+        let view = popover.contentViewController?.view
+        view?.window?.makeKey()
+        view?.window?.makeFirstResponder(view)
+    }
+
+    private func showHistory() {
+        manager.flushAllHistorySyncs()
+        if historyViewController == nil || historyViewController?.model?.store !== manager.historyStore {
+            let model = manager.historyStore.map {
+                HistoryViewModel(store: $0, manager: manager, pasteboard: historyPasteboard)
+            }
+            let history = HistoryPanelViewController(model: model)
+            history.onBack = { [weak self] in
+                guard let self else { return }
+                self.pinsViewController.reloadPins()
+                self.popover.contentViewController = self.pinsViewController
+                self.pinsViewController.view.window?.makeFirstResponder(self.pinsViewController.view)
+            }
+            history.onDismiss = { [weak self] in self?.popover.performClose(nil) }
+            history.onUtilityAction = { [weak self] in self?.perform($0) }
+            historyViewController = history
+        }
+        historyViewController?.reloadHistory()
+        popover.contentViewController = historyViewController
+        historyViewController?.focusSearch()
     }
 
     private func pinsDidChange() {
@@ -74,8 +100,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         case .paste:
             URLCommandRouter.perform(.paste, manager: manager)
         case .history:
-            popover.performClose(nil)
-            onOpenHistory?()
+            showHistory()
         case .settings:
             popover.performClose(nil)
             onOpenSettings()

@@ -49,8 +49,10 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
   picture is fetched and shown inside the pin instead of an empty
   placeholder. Markdown pins show `![alt](url)` pictures the same way.
 - **Pin history** — every pin is recorded locally (latest edited state,
-  including editable annotation data), searchable, re-pinnable, with
-  configurable retention (default 30 days).
+  including editable annotation data). Open History in the menu bar panel to
+  search, preview, pin again, copy or delete an entry without leaving the panel.
+  Clear History asks for confirmation and keeps records associated with open
+  pins. Retention is configurable in Settings.
 - **Transparent text pins** — text floats directly over the desktop; only
   runs you explicitly give a background to show one.
 - **Global hotkey** — `⌃⌥⇧⌘P` (Hyper+P) pins the clipboard from anywhere;
@@ -175,4 +177,4 @@ at socket creation, including redirect destinations; downloads are limited to
 20 MiB each, four concurrent requests and 64 pending URLs. Local `file:` images
 and image `data:` URIs remain supported. Raw HTML in Markdown is shown literally. Pin history is
 stored under `~/Library/Application Support/Pinboard/History/` and can be
-cleared or bounded by retention in the History window / Settings.
+cleared in the menu bar's History page or bounded by retention in Settings.

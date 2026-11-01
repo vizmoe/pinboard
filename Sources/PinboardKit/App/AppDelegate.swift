@@ -4,7 +4,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let manager = PinWindowManager.shared
     private var menuBarController: MenuBarController?
     private lazy var settingsWindowController = SettingsWindowController()
-    private lazy var historyWindowController = HistoryWindowController()
 
     public override init() {
         super.init()
@@ -26,7 +25,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController = MenuBarController(manager: manager) { [weak self] in
             self?.showSettings()
         }
-        menuBarController?.onOpenHistory = { [weak self] in self?.showHistory() }
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -45,11 +43,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             lastRetention = retention
             manager.pruneHistoryIfDue(force: true)
         }
-    }
-
-    func showHistory() {
-        NSApp.activate(ignoringOtherApps: true)
-        historyWindowController.show()
     }
 
     public func application(_ application: NSApplication, open urls: [URL]) {
