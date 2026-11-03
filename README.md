@@ -39,13 +39,16 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
   *Default* (system colours) and *Everforest Dark Hard*, picked with a live
   preview under **Settings → Text**. The source you edit stays the same; a
   pin you switched to a transparent background keeps it.
-- **Image annotation** — rectangle, ellipse, arrow, line, freehand, text,
-  numbered counters, highlight, redaction (irreversible mosaic and opaque
-  solid-colour fill) and crop, all non-destructive and undoable. Single-key
-  tools: V/R/O/A/L/P/T/N/H/M/B/C. Shift constrains squares/circles and snaps
-  lines/arrows to 45°. Drag corner or endpoint handles to reshape; arrow keys
-  nudge (Shift = 10 points), ⌘D duplicates, Delete removes. A slider drag is
-  one undo step. Interaction ideas follow CleanShot X and
+- **Image annotation** — rectangle, ellipse, tapered fancy arrows (drag the
+  midpoint handle to curve), line, freehand, text (plain, solid pill box and
+  outlined box styles), numbered counters, highlighter (rectangle and freehand
+  modes), 3-in-1 redaction (irreversible mosaic, irreversible secure blur and
+  opaque solid-colour fill), spotlight (dimmed backdrop with rectangle or
+  ellipse cutouts) and crop, all non-destructive and undoable. Single-key
+  tools: V/R/O/A/L/P/T/N/H/M/B/S/C. Shift constrains squares/circles and snaps
+  lines/arrows to 45°. Drag corner, endpoint or curve handles to reshape; arrow
+  keys nudge (Shift = 10 points), ⌘D duplicates, Delete removes. A slider drag
+  is one undo step. Interaction ideas follow CleanShot X and
   [Snapzy's annotation editor](https://github.com/duongductrong/Snapzy/blob/master/docs/ANNOTATE.md).
 - **Charts in pasted messages** — when a copied message ships its image only
   as an `<img>` reference (typical for Discord, Slack and web chat), the
