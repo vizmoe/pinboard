@@ -46,23 +46,41 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
+    private var isShowingHistory: Bool {
+        if let historyViewController { return popover.contentViewController === historyViewController }
+        return false
+    }
+
     @objc func togglePanel(_ sender: Any?) {
         if popover.isShown {
             popover.performClose(sender)
         } else if let anchor = (sender as? NSView) ?? statusItem.button {
-            pinsViewController.reloadPins()
+            refreshActivePage()
             popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
         }
-    }
-
-    func popoverWillShow(_ notification: Notification) {
-        pinsViewController.reloadPins()
     }
 
     func popoverDidShow(_ notification: Notification) {
         let view = popover.contentViewController?.view
         view?.window?.makeKey()
-        view?.window?.makeFirstResponder(view)
+        if isShowingHistory {
+            historyViewController?.focusSearch()
+        } else {
+            view?.window?.makeFirstResponder(view)
+        }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        historyViewController?.isPageActive = false
+    }
+
+    private func refreshActivePage() {
+        if isShowingHistory {
+            showHistory()
+        } else {
+            pinsViewController.reloadPins()
+            syncPopoverSize(for: pinsViewController)
+        }
     }
 
     private func showHistory() {
@@ -72,10 +90,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 HistoryViewModel(store: $0, manager: manager, pasteboard: historyPasteboard)
             }
             let history = HistoryPanelViewController(model: model)
-            history.onBack = { [weak self] in
+            history.onBack = { [weak self, weak history] in
                 guard let self else { return }
-                self.pinsViewController.reloadPins()
+                history?.isPageActive = false
                 self.popover.contentViewController = self.pinsViewController
+                self.pinsViewController.reloadPins()
                 self.syncPopoverSize(for: self.pinsViewController)
                 self.pinsViewController.view.window?.makeFirstResponder(self.pinsViewController.view)
             }
@@ -84,10 +103,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             historyViewController = history
             historySizeObservation = observeSize(of: history)
         }
+        historyViewController?.isPageActive = true
+        if popover.contentViewController !== historyViewController {
+            popover.contentViewController = historyViewController
+        }
         historyViewController?.reloadHistory()
-        popover.contentViewController = historyViewController
         if let historyViewController { syncPopoverSize(for: historyViewController) }
-        historyViewController?.focusSearch()
+        if popover.isShown { historyViewController?.focusSearch() }
     }
 
     private func observeSize(of page: NSViewController) -> NSKeyValueObservation {
@@ -106,16 +128,16 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     private func pinsDidChange() {
         statusItem.button?.toolTip = "Pinboard · \(manager.count) pins · \(manager.visibleCount) visible"
-        guard popover.isShown, !refreshScheduled else { return }
+        guard popover.isShown, !isShowingHistory, !refreshScheduled else { return }
         refreshScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.refreshScheduled = false
-            if self.popover.isShown { self.pinsViewController.reloadPins() }
+            if self.popover.isShown, !self.isShowingHistory { self.pinsViewController.reloadPins() }
         }
     }
 
-    private func perform(_ action: PinsPanelViewController.UtilityAction) {
+    private func perform(_ action: MenuBarUtilityAction) {
         switch action {
         case .paste:
             URLCommandRouter.perform(.paste, manager: manager)

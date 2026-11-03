@@ -6,12 +6,22 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
     let model: HistoryViewModel?
     var onBack: (() -> Void)?
     var onDismiss: (() -> Void)?
-    var onUtilityAction: ((PinsPanelViewController.UtilityAction) -> Void)?
+    var onUtilityAction: ((MenuBarUtilityAction) -> Void)?
+    var isPageActive = true
     let searchField = NSSearchField()
     let tableView = NSTableView()
     let scrollView = NSScrollView()
     let detailScrollView = NSScrollView()
-    let detailTextView = NSTextView()
+    let detailTextView: NSTextView = {
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 288, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        container.lineFragmentPadding = 0
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        return NSTextView(frame: NSRect(x: 0, y: 0, width: 304, height: 40), textContainer: container)
+    }()
     let detailImageView = NSImageView()
     private(set) var records: [HistoryRecord] = []
     private(set) var isConfirmingClear = false
@@ -28,7 +38,10 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
     init(model: HistoryViewModel?) {
         self.model = model
         super.init(nibName: nil, bundle: nil)
-        model?.onChange = { [weak self] in self?.reloadHistory() }
+        model?.onChange = { [weak self] in
+            guard let self, self.isPageActive else { return }
+            self.reloadHistory()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
@@ -80,6 +93,9 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         detailTextView.drawsBackground = false
         detailTextView.isVerticallyResizable = true
         detailTextView.isHorizontallyResizable = false
+        detailTextView.minSize = .zero
+        detailTextView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        detailTextView.autoresizingMask = [.width]
         detailTextView.textContainerInset = NSSize(width: 8, height: 8)
         detailTextView.textContainer?.widthTracksTextView = true
         detailImageView.imageScaling = .scaleProportionallyUpOrDown
@@ -102,6 +118,7 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         confirm.setAccessibilityLabel(explanation)
         confirmationButtons = [cancel, confirm]
         [toolbar, searchField, scrollView, detailScrollView, errorIcon].forEach { root.addSubview($0) }
+        root.onAppearanceChange = { [weak self] in self?.reloadHistory() }
     }
 
     private func layoutContent() {
@@ -111,10 +128,15 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         scrollView.frame = NSRect(x: 8, y: 78, width: width - 16, height: listHeight)
         tableView.tableColumns.first?.width = scrollView.contentSize.width
         detailScrollView.frame = NSRect(x: 8, y: 46, width: width - 16, height: detailHeight)
-        detailTextView.setFrameSize(detailScrollView.contentSize)
-        detailTextView.textContainer?.containerSize = NSSize(width: detailScrollView.contentSize.width - 16,
-                                                           height: .greatestFiniteMagnitude)
-        detailTextView.sizeToFit()
+        if detailScrollView.documentView === detailTextView, let container = detailTextView.textContainer {
+            let contentSize = detailScrollView.contentSize
+            let wrapWidth = max(contentSize.width - detailTextView.textContainerInset.width * 2, 1)
+            container.containerSize = NSSize(width: wrapWidth, height: .greatestFiniteMagnitude)
+            detailTextView.minSize = NSSize(width: 0, height: contentSize.height)
+            detailTextView.setFrameSize(NSSize(width: contentSize.width, height: detailTextView.frame.height))
+            detailTextView.layoutManager?.ensureLayout(for: container)
+            detailTextView.sizeToFit()
+        }
         detailImageView.frame = NSRect(origin: .zero, size: detailScrollView.contentSize)
         errorIcon.frame = NSRect(x: (width - 18) / 2, y: 50, width: 18, height: 18)
     }
@@ -138,8 +160,6 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         tableView.deselectAll(nil)
         let detail = model?.record(for: model?.selection)
         let showingList = detail == nil && !isConfirmingClear
-        toolbar.pinsButton.state = .off
-        toolbar.historyButton.state = .on
         view.setAccessibilityLabel(isConfirmingClear ? "Confirm clearing history" : "History: \(records.count) saved items")
         toolbar.setActions(isConfirmingClear ? confirmationButtons : detail != nil ? detailButtons : [clearButton])
         searchField.isHidden = !showingList
@@ -147,7 +167,9 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         scrollView.isHidden = !showingList || records.isEmpty
         detailScrollView.isHidden = detail == nil || isConfirmingClear
         errorIcon.isHidden = true
-        if let detail, !isConfirmingClear { showDetail(detail) }
+        if let detail, !isConfirmingClear {
+            view.effectiveAppearance.performAsCurrentDrawingAppearance { showDetail(detail) }
+        }
         listHeight = min(CGFloat(records.count) * 52 - (records.isEmpty ? 0 : 4), 308)
         let height: CGFloat
         if isConfirmingClear { height = 46 }
@@ -168,7 +190,15 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         guard let state = model?.detail(for: record) else { showUnreadable(); return }
         switch state.content {
         case .text(let text):
-            let display = state.textMode == .markdown ? MarkdownRenderer.render(text.string) : text
+            let display: NSAttributedString
+            switch state.textMode {
+            case .markdown:
+                display = MarkdownRenderer.render(text.string)
+            case .plainText:
+                display = NSAttributedString(string: text.string, attributes: TextDefaults.attributes)
+            case .richText:
+                display = text
+            }
             detailTextView.textStorage?.setAttributedString(display)
             detailTextView.setAccessibilityLabel("Saved text preview")
             detailScrollView.documentView = detailTextView
@@ -177,17 +207,21 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
                 layout.ensureLayout(for: container)
                 detailHeight = min(224, max(40, ceil(layout.usedRect(for: container).height) + 16))
             }
-        case .image(let image):
-            let preview = ImagePinView(image: image)
-            if let data = state.annotationData {
-                do { try preview.restoreAnnotations(data) }
-                catch { showUnreadable(); return }
+        case .image:
+            let image: NSImage?
+            do {
+                image = try model?.renderedImage(from: state, fitting: NSSize(width: 800, height: 600))
+            } catch {
+                showUnreadable()
+                return
             }
-            detailImageView.image = preview.menuPreview(fitting: NSSize(width: 800, height: 600))
+            guard let image, image.size.width > 0 else {
+                showUnreadable()
+                return
+            }
+            detailImageView.image = image
             detailScrollView.documentView = detailImageView
-            if let size = detailImageView.image?.size, size.width > 0 {
-                detailHeight = min(224, max(40, ceil((view.bounds.width - 16) * size.height / size.width)))
-            }
+            detailHeight = min(224, max(40, ceil((view.bounds.width - 16) * image.size.height / image.size.width)))
         }
     }
 

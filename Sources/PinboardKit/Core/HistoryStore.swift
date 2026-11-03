@@ -112,9 +112,11 @@ final class HistoryStore {
             }
             return nil
         case .image:
-            guard let data = try? Data(contentsOf: dir.appendingPathComponent("image.png")),
-                  let image = NSImage(data: data) else { return nil }
             do {
+                let data = try Data(contentsOf: dir.appendingPathComponent("image.png"))
+                guard let image = NSImage(data: data), image.isValid else {
+                    throw SaveError.corruptPayload(.image)
+                }
                 let annotations = record.hasAnnotations
                     ? try Data(contentsOf: dir.appendingPathComponent("annotations.json")) : nil
                 return PinContentState(content: .image(image), annotationData: annotations)
@@ -213,11 +215,14 @@ final class HistoryStore {
 
     private enum SaveError: LocalizedError {
         case encodingFailed(PinKind)
+        case corruptPayload(PinKind)
 
         var errorDescription: String? {
             switch self {
             case .encodingFailed(.text): return "The rich text could not be saved."
             case .encodingFailed(.image): return "The image could not be saved as PNG."
+            case .corruptPayload(.text): return "The saved text could not be read."
+            case .corruptPayload(.image): return "The saved image could not be read."
             }
         }
     }
