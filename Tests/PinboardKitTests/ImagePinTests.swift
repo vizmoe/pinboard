@@ -126,4 +126,27 @@ final class ImagePinTests: XCTestCase {
         XCTAssertEqual(pixel.greenComponent, 1, accuracy: 0.01,
                        "reset must recover untinted original pixels")
     }
+
+    func testCropUndoRedoAndResetKeepWindowGeometryProportional() throws {
+        let (pin, view) = try makePin(width: 800, height: 600)
+        pin.setFrame(NSRect(x: 100, y: 200, width: 400, height: 300))
+        let originalFrame = pin.panel.frame
+
+        view.annotationStore.setCrop(CGRect(x: 100, y: 100, width: 400, height: 200))
+        XCTAssertEqual(pin.panel.frame.width, 200, accuracy: 1, "crop shrinks the window at the same display scale")
+        XCTAssertEqual(pin.panel.frame.height, 100, accuracy: 1)
+        XCTAssertEqual(pin.panel.frame.maxY, originalFrame.maxY, accuracy: 1, "top-left corner stays anchored")
+
+        view.annotationStore.undoManager.undo()
+        XCTAssertEqual(pin.panel.frame, originalFrame,
+                       "undoing a crop must restore the window size instead of squashing the image into the cropped frame")
+
+        view.annotationStore.undoManager.redo()
+        XCTAssertEqual(pin.panel.frame.size, CGSize(width: 200, height: 100),
+                       "redoing a crop must re-apply the cropped window size")
+
+        view.annotationStore.reset()
+        XCTAssertEqual(pin.panel.frame, originalFrame,
+                       "restoring the original image must restore the uncropped window dimensions")
+    }
 }

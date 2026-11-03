@@ -62,4 +62,19 @@ final class AnnotationToolbarTests: XCTestCase {
         XCTAssertEqual(canvas.style.lineWidth, 7)
         XCTAssertEqual(Preferences.shared.annotationLineWidth, 7)
     }
+
+    func testFontSizeWithoutSelectionSeedsPreferences() throws {
+        let preference = Preferences.shared.annotationFontSize
+        defer { Preferences.shared.annotationFontSize = preference }
+        let (view, canvas, _) = try makeEditor()
+        canvas.tool = .text
+        let toolbar = try XCTUnwrap(view.annotationToolbar)
+        let properties = try XCTUnwrap(toolbar.stack.arrangedSubviews.last as? NSStackView)
+        let fontControls = try XCTUnwrap(properties.arrangedSubviews.compactMap { $0 as? NSStackView }.first)
+        let sizeField = try XCTUnwrap(fontControls.arrangedSubviews.compactMap { $0 as? NSTextField }.first)
+        sizeField.doubleValue = 32
+        XCTAssertTrue(sizeField.sendAction(sizeField.action, to: sizeField.target))
+        XCTAssertEqual(canvas.style.fontSize, 32)
+        XCTAssertEqual(Preferences.shared.annotationFontSize, 32)
+    }
 }

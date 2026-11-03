@@ -42,9 +42,12 @@ final class ImagePinView: NSView, PinContentDisplaying {
 
     private var pixelSize: CGSize { baseImage.pixelSize }
     private var sourceRect: CGRect { annotationStore.cropRect ?? CGRect(origin: .zero, size: pixelSize) }
+    private var displayedSourceSize: CGSize
+    private var uncroppedWindowSize: (uncropped: CGSize, cropped: CGSize)?
 
     init(image: NSImage, annotations: AnnotationStore.Payload? = nil) {
         baseImage = image
+        displayedSourceSize = image.pixelSize
         baseCGImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         effects = baseCGImage.map(ImageEffects.init(base:))
         canvas = AnnotationCanvasView(store: annotationStore, imageSize: image.pixelSize, effects: effects)
@@ -153,8 +156,28 @@ final class ImagePinView: NSView, PinContentDisplaying {
     }
 
     func refreshAfterStoreChange() {
+        let previousSize = displayedSourceSize
+        displayedSourceSize = sourceRect.size
         canvas.reconcileSelection()
         updateContentsRect()
+        if previousSize != displayedSourceSize,
+           previousSize.width > 0, previousSize.height > 0,
+           let window {
+            if annotationStore.cropRect == nil,
+               let saved = uncroppedWindowSize,
+               window.frame.size == saved.cropped {
+                uncroppedWindowSize = nil
+                resize(to: saved.uncropped)
+            } else {
+                let beforeCrop = previousSize == pixelSize ? window.frame.size : uncroppedWindowSize?.uncropped
+                let scaleX = window.frame.width / previousSize.width
+                let scaleY = window.frame.height / previousSize.height
+                applyCrop(displayScale: (x: scaleX, y: scaleY))
+                if let beforeCrop, annotationStore.cropRect != nil {
+                    uncroppedWindowSize = (uncropped: beforeCrop, cropped: window.frame.size)
+                }
+            }
+        }
         canvas.needsDisplay = true
         annotationToolbar?.syncSelection()
     }
@@ -179,17 +202,12 @@ final class ImagePinView: NSView, PinContentDisplaying {
     /// on-screen scale it had before, anchored at the window's top-left.
     func applyCrop(displayScale: (x: CGFloat, y: CGFloat)) {
         updateContentsRect()
-        guard let window else { return }
         let source = sourceRect
         let size = CGSize(
-            width: max(source.width * displayScale.x, minimumPinSize.width),
-            height: max(source.height * displayScale.y, minimumPinSize.height)
+            width: max((source.width * displayScale.x).rounded(), minimumPinSize.width),
+            height: max((source.height * displayScale.y).rounded(), minimumPinSize.height)
         )
-        var frame = window.frame
-        frame.origin.y += frame.height - size.height
-        frame.size = size
-        window.setFrame(frame, display: true)
-        window.invalidateShadow()
+        resize(to: size)
     }
 
     // MARK: - PinContentDisplaying

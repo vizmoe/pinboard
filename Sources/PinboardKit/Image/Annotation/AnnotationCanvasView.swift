@@ -283,6 +283,7 @@ final class AnnotationCanvasView: NSView {
         var resized = annotation
         suppressedID = annotation.id
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if event.type == .leftMouseUp { break }
             var point = imagePoint(from: convert(event.locationInWindow, from: nil))
             if event.modifierFlags.contains(.shift) {
                 point = annotation.tool.constrainedEndpoint(from: fixed, to: point)
@@ -290,7 +291,6 @@ final class AnnotationCanvasView: NSView {
             if isLine { resized.points[handle] = point } else { resized.points = [fixed, point] }
             draft = resized
             needsDisplay = true
-            if event.type == .leftMouseUp { break }
         }
         suppressedID = nil
         draft = nil
@@ -349,10 +349,8 @@ final class AnnotationCanvasView: NSView {
 
     func confirmCrop() {
         guard let rect = cropDraft, rect.width > 8, rect.height > 8 else { return }
-        let previousScale = (x: scaleX, y: scaleY)
         cropDraft = nil
         store.setCrop(rect)
-        imagePin?.applyCrop(displayScale: previousScale)
         tool = .select
         imagePin?.annotationToolbar?.syncSelection()
     }
