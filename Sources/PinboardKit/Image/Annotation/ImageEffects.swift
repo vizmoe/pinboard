@@ -1,17 +1,19 @@
 import AppKit
 import CryptoKit
 
-/// Produces irreversible mosaic tiles from a base image, shared by the
-/// on-screen canvas and the exporter so both look identical.
+/// Produces irreversible mosaic and secure-blur images from a base bitmap,
+/// shared by the on-screen canvas and the exporter so both look identical.
 ///
-/// Unlike `CIPixellate` (which preserves each block's exact arithmetic average
-/// and can be inverted by reconstruction tools), this algorithm coarsely
-/// quantizes each cell and permutes/blends across a multi-cell neighborhood
-/// using `SHA256`, rendering uniform opaque tiles that discard sub-block ink
-/// density and character stroke geometry.
+/// Unlike naive `CIPixellate` or `CIGaussianBlur` (which preserve invertible
+/// per-block pixel averages or linear convolutions), both effects first
+/// coarsely quantize each cell and permute/blend across a multi-cell
+/// neighborhood using `SHA256`. `mosaic` keeps the crisp uniform tiles;
+/// `secureBlur` smooths across the scrambled tiles so the result looks like a
+/// soft blur while discarding sub-block stroke density and glyph geometry.
 final class ImageEffects {
     private let base: CGImage
     private var mosaicCache: [Int: CGImage] = [:]
+    private var blurCache: [Int: CGImage] = [:]
 
     init(base: CGImage) {
         self.base = base
@@ -21,14 +23,47 @@ final class ImageEffects {
         mosaic(blockSize: nil)
     }
 
+    var blurred: CGImage? {
+        secureBlur(radius: nil)
+    }
+
     func mosaic(blockSize: Int? = nil) -> CGImage? {
+        let size = resolvedBlockSize(blockSize)
+        guard size > 0 else { return nil }
+        if let cached = mosaicCache[size] { return cached }
+        guard var buffer = scrambledBuffer(cellSize: size),
+              let image = makeImage(from: &buffer.pixels, width: buffer.width, height: buffer.height) else {
+            return nil
+        }
+        mosaicCache[size] = image
+        return image
+    }
+
+    func secureBlur(radius: Int? = nil) -> CGImage? {
+        let size = resolvedBlockSize(radius)
+        guard size > 0 else { return nil }
+        if let cached = blurCache[size] { return cached }
+        guard var buffer = scrambledBuffer(cellSize: size) else { return nil }
+        let blurRadius = max(4, size * 2 / 3)
+        smoothBoxBlur(&buffer.pixels, width: buffer.width, height: buffer.height, radius: blurRadius)
+        guard let image = makeImage(from: &buffer.pixels, width: buffer.width, height: buffer.height) else {
+            return nil
+        }
+        blurCache[size] = image
+        return image
+    }
+
+    private func resolvedBlockSize(_ requested: Int?) -> Int {
         let width = base.width
         let height = base.height
-        guard width > 0, height > 0 else { return nil }
+        guard width > 0, height > 0 else { return 0 }
         let defaultSize = max(12, min(width, height) / 32)
-        let size = max(8, min(max(width, height), blockSize ?? defaultSize))
-        if let cached = mosaicCache[size] { return cached }
+        return max(8, min(max(width, height), requested ?? defaultSize))
+    }
 
+    private func scrambledBuffer(cellSize size: Int) -> (pixels: [UInt8], width: Int, height: Int)? {
+        let width = base.width
+        let height = base.height
         let bytesPerRow = width * 4
         var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
@@ -119,7 +154,7 @@ final class ImageEffects {
                 let avgG = sumG / nCount
                 let avgB = sumB / nCount
                 let picked = neighbors[Int(digest[0]) % nCount]
-                let weight = 96 + (Int(digest[1]) % 65) // 96...160 around 50/50
+                let weight = 96 + (Int(digest[1]) % 65)
                 var r = (avgR * weight + picked.r * (256 - weight)) / 256
                 var g = (avgG * weight + picked.g * (256 - weight)) / 256
                 var b = (avgB * weight + picked.b * (256 - weight)) / 256
@@ -146,9 +181,73 @@ final class ImageEffects {
                 }
             }
         }
+        return (pixels, width, height)
+    }
 
-        guard let result = context.makeImage() else { return nil }
-        mosaicCache[size] = result
-        return result
+    private func smoothBoxBlur(_ pixels: inout [UInt8], width: Int, height: Int, radius: Int) {
+        guard radius > 1, width > 1, height > 1 else { return }
+        let bytesPerRow = width * 4
+        var temp = pixels
+        let r = min(radius, min(width - 1, height - 1))
+        for _ in 0..<2 {
+            // Horizontal pass
+            for y in 0..<height {
+                let rowOffset = y * bytesPerRow
+                for x in 0..<width {
+                    let x0 = max(0, x - r)
+                    let x1 = min(width - 1, x + r)
+                    let count = x1 - x0 + 1
+                    var sumR = 0, sumG = 0, sumB = 0
+                    for sx in x0...x1 {
+                        let off = rowOffset + sx * 4
+                        sumR += Int(pixels[off])
+                        sumG += Int(pixels[off + 1])
+                        sumB += Int(pixels[off + 2])
+                    }
+                    let dst = rowOffset + x * 4
+                    temp[dst] = UInt8(sumR / count)
+                    temp[dst + 1] = UInt8(sumG / count)
+                    temp[dst + 2] = UInt8(sumB / count)
+                    temp[dst + 3] = 255
+                }
+            }
+            // Vertical pass
+            for x in 0..<width {
+                let colOffset = x * 4
+                for y in 0..<height {
+                    let y0 = max(0, y - r)
+                    let y1 = min(height - 1, y + r)
+                    let count = y1 - y0 + 1
+                    var sumR = 0, sumG = 0, sumB = 0
+                    for sy in y0...y1 {
+                        let off = sy * bytesPerRow + colOffset
+                        sumR += Int(temp[off])
+                        sumG += Int(temp[off + 1])
+                        sumB += Int(temp[off + 2])
+                    }
+                    let dst = y * bytesPerRow + colOffset
+                    pixels[dst] = UInt8(sumR / count)
+                    pixels[dst + 1] = UInt8(sumG / count)
+                    pixels[dst + 2] = UInt8(sumB / count)
+                    pixels[dst + 3] = 255
+                }
+            }
+        }
+    }
+
+    private func makeImage(from pixels: inout [UInt8], width: Int, height: Int) -> CGImage? {
+        let bytesPerRow = width * 4
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else { return nil }
+        return context.makeImage()
     }
 }

@@ -14,7 +14,11 @@ final class AnnotationToolbar: AttachedToolbar {
     private let fontControls = NSStackView()
     private let properties = NSStackView()
     private let redactionModeControl = FirstMouseSegmentedControl()
+    private let spotlightShapeControl = FirstMouseSegmentedControl()
+    private let highlightModeControl = FirstMouseSegmentedControl()
+    private let textStyleControl = FirstMouseSegmentedControl()
     private var preferredRedactionTool: AnnotationTool = .mosaic
+    private var preferredRedactionStyle: AnnotationRedactionStyle = .mosaic
     private let familyPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sizeField = NSTextField()
 
@@ -22,7 +26,7 @@ final class AnnotationToolbar: AttachedToolbar {
     private weak var pin: ImagePinView?
 
     private static let tools: [AnnotationTool] = [
-        .select, .rectangle, .ellipse, .arrow, .line, .freehand, .text, .counter, .highlight, .mosaic, .crop
+        .select, .rectangle, .ellipse, .arrow, .line, .freehand, .text, .counter, .highlight, .mosaic, .spotlight, .crop
     ]
 
     init(canvas: AnnotationCanvasView, pin: ImagePinView) {
@@ -34,6 +38,31 @@ final class AnnotationToolbar: AttachedToolbar {
         finalizeLayout()
         NotificationCenter.default.addObserver(self, selector: #selector(undoGroupClosed),
             name: .NSUndoManagerDidCloseUndoGroup, object: canvas.store.undoManager)
+    }
+
+    private func configureSegmented(
+        _ control: NSSegmentedControl,
+        segments: [(symbol: String, label: String, tooltip: String)],
+        action: Selector
+    ) {
+        control.segmentCount = segments.count
+        control.trackingMode = .selectOne
+        control.controlSize = .small
+        control.segmentStyle = .rounded
+        let iconConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        for (index, item) in segments.enumerated() {
+            control.setImage(
+                NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.label)?
+                    .withSymbolConfiguration(iconConfig),
+                forSegment: index
+            )
+            control.setToolTip(item.tooltip, forSegment: index)
+            control.setWidth(28, forSegment: index)
+        }
+        control.selectedSegment = 0
+        control.target = self
+        control.action = action
+        control.isHidden = true
     }
 
     private func buildItems() {
@@ -48,29 +77,43 @@ final class AnnotationToolbar: AttachedToolbar {
         }
         stack.addArrangedSubview(makeSeparator())
 
-        redactionModeControl.segmentCount = 2
-        redactionModeControl.trackingMode = .selectOne
-        redactionModeControl.controlSize = .small
-        redactionModeControl.segmentStyle = .rounded
-        let iconConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-        redactionModeControl.setImage(
-            NSImage(systemSymbolName: AnnotationTool.mosaic.symbol, accessibilityDescription: "Mosaic")?
-                .withSymbolConfiguration(iconConfig),
-            forSegment: 0
+        configureSegmented(
+            redactionModeControl,
+            segments: [
+                (AnnotationTool.mosaic.symbol, "Mosaic", "Mosaic (M)"),
+                ("drop.fill", "Secure Blur", "Secure Blur"),
+                (AnnotationTool.blur.symbol, "Solid Fill", "Solid Fill (B)")
+            ],
+            action: #selector(redactionModeChanged)
         )
-        redactionModeControl.setToolTip("Mosaic (M)", forSegment: 0)
-        redactionModeControl.setWidth(28, forSegment: 0)
-        redactionModeControl.setImage(
-            NSImage(systemSymbolName: AnnotationTool.blur.symbol, accessibilityDescription: "Solid Fill")?
-                .withSymbolConfiguration(iconConfig),
-            forSegment: 1
+
+        configureSegmented(
+            spotlightShapeControl,
+            segments: [
+                ("rectangle", "Rectangle", "Rectangle Spotlight"),
+                ("oval", "Ellipse", "Ellipse Spotlight")
+            ],
+            action: #selector(spotlightShapeChanged)
         )
-        redactionModeControl.setToolTip("Solid Fill (B)", forSegment: 1)
-        redactionModeControl.setWidth(28, forSegment: 1)
-        redactionModeControl.selectedSegment = 0
-        redactionModeControl.target = self
-        redactionModeControl.action = #selector(redactionModeChanged)
-        redactionModeControl.isHidden = true
+
+        configureSegmented(
+            highlightModeControl,
+            segments: [
+                ("rectangle", "Rectangle", "Rectangle Highlight"),
+                ("scribble", "Freehand", "Freehand Highlight")
+            ],
+            action: #selector(highlightModeChanged)
+        )
+
+        configureSegmented(
+            textStyleControl,
+            segments: [
+                ("textformat", "Plain Text", "Plain Text"),
+                ("rectangle.fill", "Boxed Text", "Boxed Text"),
+                ("rectangle", "Outlined Text", "Outlined Text")
+            ],
+            action: #selector(textStyleChanged)
+        )
 
         colorSwatch.color = Preferences.shared.annotationColor
         colorSwatch.onColorChange = { [weak self] color in
@@ -86,10 +129,13 @@ final class AnnotationToolbar: AttachedToolbar {
         properties.orientation = .horizontal
         properties.spacing = 6
         properties.addArrangedSubview(redactionModeControl)
+        properties.addArrangedSubview(spotlightShapeControl)
+        properties.addArrangedSubview(highlightModeControl)
         properties.addArrangedSubview(colorSwatch)
 
         fontControls.orientation = .horizontal
         fontControls.spacing = 4
+        fontControls.addArrangedSubview(textStyleControl)
         familyPopUp.addItems(withTitles: NSFontManager.shared.availableFontFamilies)
         familyPopUp.target = self
         familyPopUp.action = #selector(fontFamilyChanged)
@@ -174,7 +220,14 @@ final class AnnotationToolbar: AttachedToolbar {
 
     func syncSelection() {
         guard let canvas else { return }
-        if canvas.tool.isRedaction { preferredRedactionTool = canvas.tool }
+        if canvas.tool.isRedaction {
+            preferredRedactionTool = canvas.tool
+            if let explicit = canvas.style.redactionStyle {
+                preferredRedactionStyle = explicit
+            } else {
+                preferredRedactionStyle = canvas.tool == .blur ? .solid : .mosaic
+            }
+        }
         for (tool, button) in toolButtons {
             let active = tool == canvas.tool || (tool == .mosaic && canvas.tool.isRedaction)
             button.contentTintColor = active ? .controlAccentColor : .labelColor
@@ -182,22 +235,74 @@ final class AnnotationToolbar: AttachedToolbar {
 
         // Controls mirror the selected annotation's own style; falling back
         // to the pin's current style when nothing is selected.
-        let selectedText = canvas.selectedAnnotation?.tool == .text ? canvas.selectedAnnotation : nil
-        let effectiveStyle = canvas.selectedAnnotation?.style ?? canvas.style
+        let selected = canvas.selectedAnnotation
+        let selectedText = selected?.tool == .text ? selected : nil
+        let effectiveStyle = selected?.style ?? canvas.style
         colorSwatch.setColorSilently(effectiveStyle.color)
         widthSlider.doubleValue = Double(effectiveStyle.lineWidth)
 
-        let effectiveTool = canvas.selectedAnnotation?.tool ?? canvas.tool
+        let effectiveTool = selected?.tool ?? canvas.tool
         properties.isHidden = effectiveTool == .select || effectiveTool == .crop
+
+        let redactionStyle: AnnotationRedactionStyle = {
+            if let selected, selected.tool.isRedaction {
+                return selected.effectiveRedactionStyle
+            }
+            if let explicit = canvas.style.redactionStyle {
+                return explicit
+            }
+            return effectiveTool == .blur ? .solid : .mosaic
+        }()
         redactionModeControl.isHidden = !effectiveTool.isRedaction
         if effectiveTool.isRedaction {
-            redactionModeControl.selectedSegment = effectiveTool == .blur ? 1 : 0
+            switch redactionStyle {
+            case .mosaic: redactionModeControl.selectedSegment = 0
+            case .blur: redactionModeControl.selectedSegment = 1
+            case .solid: redactionModeControl.selectedSegment = 2
+            }
         }
-        colorSwatch.isHidden = effectiveTool == .mosaic
-        fontControls.isHidden = effectiveTool != .text && effectiveTool != .counter && selectedText == nil
+
+        spotlightShapeControl.isHidden = effectiveTool != .spotlight
+        if effectiveTool == .spotlight {
+            let shape = selected?.effectiveSpotlightShape ?? canvas.style.spotlightShape ?? .rectangle
+            spotlightShapeControl.selectedSegment = shape == .ellipse ? 1 : 0
+        }
+
+        highlightModeControl.isHidden = effectiveTool != .highlight
+        let highlightMode = selected?.effectiveHighlightMode ?? canvas.style.highlightMode ?? .rectangle
+        if effectiveTool == .highlight {
+            highlightModeControl.selectedSegment = highlightMode == .freehand ? 1 : 0
+        }
+
+        let isText = effectiveTool == .text || selectedText != nil
+        textStyleControl.isHidden = !isText
+        if isText {
+            let textStyle = selected?.effectiveTextStyle ?? canvas.style.textStyle ?? .standard
+            switch textStyle {
+            case .standard: textStyleControl.selectedSegment = 0
+            case .box: textStyleControl.selectedSegment = 1
+            case .outline: textStyleControl.selectedSegment = 2
+            }
+        }
+
+        colorSwatch.isHidden = effectiveTool == .spotlight
+            || (effectiveTool.isRedaction && redactionStyle != .solid)
+        fontControls.isHidden = !isText && effectiveTool != .counter
         familyPopUp.isHidden = effectiveTool == .counter
-        widthSlider.isHidden = effectiveTool == .text || effectiveTool == .counter || effectiveTool == .blur
-        widthSlider.toolTip = effectiveTool == .mosaic ? "Mosaic Size" : "Line Width"
+
+        let hidesSlider = effectiveTool == .text
+            || effectiveTool == .counter
+            || (effectiveTool.isRedaction && redactionStyle == .solid)
+            || (effectiveTool == .highlight && highlightMode == .rectangle)
+        widthSlider.isHidden = hidesSlider
+        if effectiveTool.isRedaction {
+            widthSlider.toolTip = redactionStyle == .blur ? "Blur Intensity" : "Mosaic Size"
+        } else if effectiveTool == .spotlight {
+            widthSlider.toolTip = "Spotlight Dimming"
+        } else {
+            widthSlider.toolTip = "Line Width"
+        }
+
         let family = effectiveStyle.fontName ?? NSFont.systemFont(ofSize: 1).familyName ?? "Helvetica"
         familyPopUp.selectItem(withTitle: family)
         if familyPopUp.selectedItem == nil { familyPopUp.setTitle(family) }
@@ -212,23 +317,66 @@ final class AnnotationToolbar: AttachedToolbar {
     // MARK: - Actions
 
     @objc private func selectTool(_ sender: NSButton) {
-        guard AnnotationToolbar.tools.indices.contains(sender.tag) else { return }
+        guard AnnotationToolbar.tools.indices.contains(sender.tag), let canvas else { return }
         let chosen = AnnotationToolbar.tools[sender.tag]
-        canvas?.tool = chosen == .mosaic ? preferredRedactionTool : chosen
+        if chosen == .mosaic {
+            canvas.style.redactionStyle = preferredRedactionStyle
+            canvas.tool = preferredRedactionTool
+        } else {
+            canvas.tool = chosen
+        }
         syncSelection()
     }
 
     @objc private func redactionModeChanged() {
         guard let canvas else { return }
         canvas.commitTextEditor()
-        let mode: AnnotationTool = redactionModeControl.selectedSegment == 1 ? .blur : .mosaic
-        preferredRedactionTool = mode
+        let styleChoice: AnnotationRedactionStyle
+        let toolChoice: AnnotationTool
+        switch redactionModeControl.selectedSegment {
+        case 1:
+            styleChoice = .blur
+            toolChoice = .mosaic
+        case 2:
+            styleChoice = .solid
+            toolChoice = .blur
+        default:
+            styleChoice = .mosaic
+            toolChoice = .mosaic
+        }
+        preferredRedactionStyle = styleChoice
+        preferredRedactionTool = toolChoice
+        canvas.style.redactionStyle = styleChoice
         if var selected = canvas.selectedAnnotation, selected.tool.isRedaction {
-            selected.tool = mode
+            selected.tool = toolChoice
+            selected.style.redactionStyle = styleChoice
             canvas.store.update(selected, actionName: "Change Redaction Style")
         } else {
-            canvas.tool = mode
+            canvas.tool = toolChoice
         }
+        syncSelection()
+    }
+
+    @objc private func spotlightShapeChanged() {
+        let shape: AnnotationSpotlightShape = spotlightShapeControl.selectedSegment == 1 ? .ellipse : .rectangle
+        canvas?.updateSelectedStyle { $0.spotlightShape = shape }
+        syncSelection()
+    }
+
+    @objc private func highlightModeChanged() {
+        let mode: AnnotationHighlightMode = highlightModeControl.selectedSegment == 1 ? .freehand : .rectangle
+        canvas?.style.highlightMode = mode
+        syncSelection()
+    }
+
+    @objc private func textStyleChanged() {
+        let styleChoice: AnnotationTextStyle
+        switch textStyleControl.selectedSegment {
+        case 1: styleChoice = .box
+        case 2: styleChoice = .outline
+        default: styleChoice = .standard
+        }
+        canvas?.updateSelectedStyle { $0.textStyle = styleChoice }
         syncSelection()
     }
 

@@ -97,13 +97,9 @@ final class AnnotationCanvasView: NSView {
         context.saveGraphicsState()
         context.cgContext.scaleBy(x: scaleX, y: scaleY)
         context.cgContext.translateBy(x: -sourceRect.minX, y: -sourceRect.minY)
-        let visible = store.annotations.filter { $0.id != suppressedID }
+        var visible = store.annotations.filter { $0.id != suppressedID }
+        if let draft { visible.append(draft) }
         AnnotationRenderer.draw(visible, imageSize: imageSize, effects: effects, in: context)
-        if let draft {
-            context.saveGraphicsState()
-            AnnotationRenderer.draw(draft, imageSize: imageSize, effects: effects, in: context)
-            context.restoreGraphicsState()
-        }
         context.restoreGraphicsState()
 
         guard isActive else { return }
@@ -197,10 +193,11 @@ final class AnnotationCanvasView: NSView {
         var annotation = Annotation(tool: tool, points: [start], style: style)
         NSCursor.crosshair.set()
 
+        let isFreehandPath = tool == .freehand || (tool == .highlight && style.highlightMode == .freehand)
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             var current = imagePoint(from: convert(event.locationInWindow, from: nil))
             if event.modifierFlags.contains(.shift) { current = tool.constrainedEndpoint(from: start, to: current) }
-            if tool == .freehand {
+            if isFreehandPath {
                 annotation.points.append(current)
             } else {
                 annotation.points = [start, current]
@@ -221,6 +218,8 @@ final class AnnotationCanvasView: NSView {
     private func isMeaningful(_ annotation: Annotation) -> Bool {
         switch annotation.tool {
         case .freehand:
+            return annotation.points.count >= 2
+        case .highlight where annotation.effectiveHighlightMode == .freehand:
             return annotation.points.count >= 2
         case .line, .arrow:
             guard annotation.points.count >= 2 else { return false }
@@ -259,8 +258,19 @@ final class AnnotationCanvasView: NSView {
     /// Handles are hit-tested in view points so they remain usable at every zoom.
     private func selectionHandles(for annotation: Annotation) -> [CGPoint] {
         switch annotation.tool {
-        case .line, .arrow: return Array(annotation.points.prefix(2))
-        case .rectangle, .ellipse, .highlight, .blur, .mosaic:
+        case .line:
+            return Array(annotation.points.prefix(2))
+        case .arrow:
+            guard annotation.points.count >= 2 else { return [] }
+            let start = annotation.points[0]
+            let end = annotation.points[1]
+            let mid = annotation.points.count >= 3
+                ? annotation.points[2]
+                : CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+            return [start, end, mid]
+        case .highlight where annotation.effectiveHighlightMode == .freehand:
+            return []
+        case .rectangle, .ellipse, .highlight, .blur, .mosaic, .spotlight:
             let rect = annotation.rect
             return [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
                     CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
@@ -279,16 +289,25 @@ final class AnnotationCanvasView: NSView {
         guard let window else { return }
         let handles = selectionHandles(for: annotation)
         let isLine = annotation.tool == .line || annotation.tool == .arrow
-        let fixed = handles[isLine ? 1 - handle : (handle + 2) % 4]
+        let isCurveHandle = annotation.tool == .arrow && handle == 2
+        let fixed = isCurveHandle
+            ? handles[0]
+            : handles[isLine ? 1 - handle : (handle + 2) % 4]
         var resized = annotation
         suppressedID = annotation.id
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             if event.type == .leftMouseUp { break }
             var point = imagePoint(from: convert(event.locationInWindow, from: nil))
-            if event.modifierFlags.contains(.shift) {
+            if event.modifierFlags.contains(.shift), !isCurveHandle {
                 point = annotation.tool.constrainedEndpoint(from: fixed, to: point)
             }
-            if isLine { resized.points[handle] = point } else { resized.points = [fixed, point] }
+            if isCurveHandle {
+                resized.points = [annotation.points[0], annotation.points[1], point]
+            } else if isLine {
+                resized.points[handle] = point
+            } else {
+                resized.points = [fixed, point]
+            }
             draft = resized
             needsDisplay = true
         }

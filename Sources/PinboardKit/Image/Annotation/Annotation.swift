@@ -12,6 +12,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
     case highlight
     case blur
     case mosaic
+    case spotlight
     case crop
 
     var symbol: String {
@@ -27,6 +28,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .highlight: return "highlighter"
         case .blur: return "rectangle.fill"
         case .mosaic: return "squareshape.split.3x3"
+        case .spotlight: return "light.max"
         case .crop: return "crop"
         }
     }
@@ -44,6 +46,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .highlight: return "Highlight"
         case .blur: return "Solid Fill"
         case .mosaic: return "Mosaic"
+        case .spotlight: return "Spotlight"
         case .crop: return "Crop"
         }
     }
@@ -62,6 +65,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .highlight: return "h"
         case .blur: return "b"
         case .mosaic: return "m"
+        case .spotlight: return "s"
         case .crop: return "c"
         }
     }
@@ -71,7 +75,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
         let dx = end.x - start.x
         let dy = end.y - start.y
         switch self {
-        case .rectangle, .ellipse:
+        case .rectangle, .ellipse, .spotlight:
             let side = max(abs(dx), abs(dy))
             return CGPoint(x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side))
         case .arrow, .line:
@@ -85,16 +89,42 @@ enum AnnotationTool: String, Codable, CaseIterable {
     /// Tools whose geometry is a drag rectangle.
     var isRectangular: Bool {
         switch self {
-        case .rectangle, .ellipse, .highlight, .blur, .mosaic, .crop: return true
+        case .rectangle, .ellipse, .highlight, .blur, .mosaic, .spotlight, .crop: return true
         default: return false
         }
     }
 
-    /// True for redaction tools (Mosaic and Solid Fill), which share a single
-    /// toolbar entry and switch modes in the contextual properties strip.
+    /// True for redaction tools (Mosaic, Secure Blur, and Solid Fill), which
+    /// share a single toolbar entry and switch modes in the contextual strip.
     var isRedaction: Bool {
         self == .mosaic || self == .blur
     }
+}
+
+/// Redaction styles offered by the unified 3-in-1 Redact tool.
+enum AnnotationRedactionStyle: String, Codable, CaseIterable {
+    case mosaic
+    case blur
+    case solid
+}
+
+/// Visual presentation for text annotations, inspired by CleanShot X.
+enum AnnotationTextStyle: String, Codable, CaseIterable {
+    case standard
+    case box
+    case outline
+}
+
+/// Cutout geometry for Spotlight annotations.
+enum AnnotationSpotlightShape: String, Codable, CaseIterable {
+    case rectangle
+    case ellipse
+}
+
+/// Input mode for Highlighter annotations.
+enum AnnotationHighlightMode: String, Codable, CaseIterable {
+    case rectangle
+    case freehand
 }
 
 struct AnnotationStyle: Codable, Equatable {
@@ -104,6 +134,10 @@ struct AnnotationStyle: Codable, Equatable {
     /// Font family for text annotations; nil falls back to the system font.
     /// Optional so payloads written before font support still decode.
     var fontName: String?
+    var redactionStyle: AnnotationRedactionStyle?
+    var textStyle: AnnotationTextStyle?
+    var spotlightShape: AnnotationSpotlightShape?
+    var highlightMode: AnnotationHighlightMode?
 
     var color: NSColor { NSColor(hex: colorHex) ?? .systemRed }
 
@@ -137,9 +171,27 @@ struct Annotation: Codable, Identifiable, Equatable {
     var style: AnnotationStyle
     var text: String?
 
+    var effectiveRedactionStyle: AnnotationRedactionStyle {
+        if let redactionStyle = style.redactionStyle { return redactionStyle }
+        return tool == .blur ? .solid : .mosaic
+    }
+
+    var effectiveTextStyle: AnnotationTextStyle {
+        style.textStyle ?? .standard
+    }
+
+    var effectiveSpotlightShape: AnnotationSpotlightShape {
+        style.spotlightShape ?? .rectangle
+    }
+
+    var effectiveHighlightMode: AnnotationHighlightMode {
+        style.highlightMode ?? (points.count > 2 ? .freehand : .rectangle)
+    }
+
     var rect: CGRect {
-        guard let first = points.first else { return .zero }
-        return points.dropFirst().reduce(CGRect(origin: first, size: .zero)) { partial, point in
+        let samples = (tool == .arrow && points.count >= 3) ? arrowCurveSamples() : points
+        guard let first = samples.first else { return .zero }
+        return samples.dropFirst().reduce(CGRect(origin: first, size: .zero)) { partial, point in
             partial.union(CGRect(origin: point, size: .zero))
         }
     }
@@ -156,6 +208,9 @@ struct Annotation: Codable, Identifiable, Equatable {
             let origin = points.first ?? .zero
             let size = textSizer(self)
             return CGRect(x: origin.x, y: origin.y - size.height, width: size.width, height: size.height)
+        case .highlight where effectiveHighlightMode == .freehand:
+            let pad = max(style.lineWidth * 2, 8)
+            return rect.insetBy(dx: -pad, dy: -pad)
         default:
             return rect.insetBy(dx: -style.lineWidth, dy: -style.lineWidth)
         }
@@ -168,12 +223,48 @@ struct Annotation: Codable, Identifiable, Equatable {
             return zip(points, points.dropFirst()).contains {
                 Self.distance(from: point, toSegment: $0, $1) <= tolerance * 1.5
             }
-        case .line, .arrow:
+        case .highlight where effectiveHighlightMode == .freehand:
+            let tolerance = max(style.lineWidth * 2, 10)
+            return zip(points, points.dropFirst()).contains {
+                Self.distance(from: point, toSegment: $0, $1) <= tolerance
+            }
+        case .arrow:
+            guard points.count >= 2 else { return false }
+            let samples = points.count >= 3 ? arrowCurveSamples() : Array(points.prefix(2))
+            let tolerance = max(style.lineWidth * 1.2, 8)
+            return zip(samples, samples.dropFirst()).contains {
+                Self.distance(from: point, toSegment: $0, $1) <= tolerance
+            }
+        case .line:
             guard points.count >= 2 else { return false }
             return Annotation.distance(from: point, toSegment: points[0], points[1]) <= max(style.lineWidth, 8)
         default:
             return boundingBox(textSizer: textSizer).contains(point)
         }
+    }
+
+    func arrowCurveSamples(steps: Int = 16) -> [CGPoint] {
+        guard points.count >= 2 else { return points }
+        let start = points[0]
+        let end = points[1]
+        guard points.count >= 3 else { return [start, end] }
+        let mid = points[2]
+        return (0...max(steps, 2)).map { step in
+            let t = CGFloat(step) / CGFloat(max(steps, 2))
+            return Self.quadraticBezierPoint(start: start, passThrough: mid, end: end, t: t)
+        }
+    }
+
+    static func quadraticBezierPoint(start: CGPoint, passThrough mid: CGPoint, end: CGPoint, t: CGFloat) -> CGPoint {
+        let control = CGPoint(
+            x: 2 * mid.x - 0.5 * (start.x + end.x),
+            y: 2 * mid.y - 0.5 * (start.y + end.y)
+        )
+        let u = 1 - t
+        return CGPoint(
+            x: u * u * start.x + 2 * u * t * control.x + t * t * end.x,
+            y: u * u * start.y + 2 * u * t * control.y + t * t * end.y
+        )
     }
 
     mutating func translate(by offset: CGVector) {
