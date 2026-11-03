@@ -71,7 +71,7 @@ struct TextFormatter {
     }
 
     func setAttribute(_ key: NSAttributedString.Key, value: Any?) {
-        guard hasSelection, let storage = textView.textStorage else {
+        guard hasSelection, textView.textStorage != nil else {
             var attributes = textView.typingAttributes
             if let value { attributes[key] = value } else { attributes.removeValue(forKey: key) }
             textView.typingAttributes = attributes

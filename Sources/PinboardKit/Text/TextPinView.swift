@@ -15,8 +15,10 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     private let scrollView = NSScrollView()
     private let textView: PinTextView
+    private let textUndoManager = UndoManager()
     private(set) var isEditing = false
     private(set) var formatToolbar: TextFormatToolbar?
+    var pinUndoManager: UndoManager? { isEditing ? textUndoManager : nil }
 
     /// How this pin currently interprets its text.
     private(set) var textMode: TextContentMode
@@ -190,6 +192,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         if abs(container.size.width - wrapWidth) > 0.5 {
             container.size = NSSize(width: wrapWidth, height: .greatestFiniteMagnitude)
         }
+        fitAttachmentBounds(to: wrapWidth)
         textView.minSize = NSSize(width: 0, height: contentSize.height)
         if abs(textView.frame.width - contentSize.width) > 0.5 {
             textView.setFrameSize(NSSize(width: contentSize.width, height: textView.frame.height))
@@ -197,6 +200,25 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         textView.layoutManager?.ensureLayout(for: container)
         textView.sizeToFit()
         textView.needsDisplay = true
+    }
+
+    private func fitAttachmentBounds(to wrapWidth: CGFloat) {
+        guard wrapWidth > 1, let storage = textView.textStorage, storage.length > 0 else { return }
+        storage.enumerateAttribute(.attachment, in: storage.fullRange, options: []) { value, range, _ in
+            guard let attachment = value as? NSTextAttachment else { return }
+            if attachment.image == nil,
+               storage.attribute(DeferredImages.sourceAttribute, at: range.location, effectiveRange: nil) == nil,
+               let data = attachment.fileWrapper?.regularFileContents,
+               let image = NSImage(data: data), image.isValid {
+                attachment.image = image
+            }
+            guard let image = attachment.image else { return }
+            let fitted = Self.imageBounds(for: image, fitting: wrapWidth)
+            if attachment.bounds != fitted {
+                attachment.bounds = fitted
+                textView.layoutManager?.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+            }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
@@ -333,6 +355,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
             textView.typingAttributes = sourceAttributes
             appliedTheme = markdownTheme
         }
+        textUndoManager.removeAllActions()
         applyEditorColors(for: mode)
         syncWrapWidth()
     }
@@ -365,6 +388,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
                 textView.textStorage?.setAttributedString(
                     NSAttributedString(string: sourceText, attributes: sourceAttributes)
                 )
+                textUndoManager.removeAllActions()
             }
             textView.setEditableMode()
             pinController?.rootView.isEditingContent = true
@@ -391,6 +415,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
                 MarkdownRenderer.render(sourceText, style: .init(theme: markdownTheme))
             )
             textView.typingAttributes = sourceAttributes
+            textUndoManager.removeAllActions()
         }
         textView.setReadOnlyMode()
         pinController?.rootView.isEditingContent = false
@@ -505,7 +530,11 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         textView.layoutManager?.invalidateDisplay(forCharacterRange: range)
         syncWrapWidth()
         pinController?.growToFitContent()
-        pinController?.contentDidChange()
+        if textMode == .richText {
+            pinController?.contentDidChange()
+        } else {
+            pinController?.manager?.notifyChange()
+        }
     }
 
     /// The image could not be loaded: its alt text takes the placeholder's
@@ -524,7 +553,11 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         storage.replaceCharacters(in: range, with: NSAttributedString(string: alt, attributes: attributes))
 
         syncWrapWidth()
-        pinController?.contentDidChange()
+        if textMode == .richText {
+            pinController?.contentDidChange()
+        } else {
+            pinController?.manager?.notifyChange()
+        }
     }
 
     /// The attachment's current range — found by identity, because text typed

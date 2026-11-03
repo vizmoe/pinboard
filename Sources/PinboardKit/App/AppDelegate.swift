@@ -5,7 +5,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
     private lazy var settingsWindowController = SettingsWindowController()
 
+    private var lastRetention: (mode: Preferences.HistoryRetention, days: Double)
+
     public override init() {
+        lastRetention = (
+            mode: Preferences.shared.historyRetention,
+            days: Preferences.shared.historyCustomDays
+        )
         super.init()
     }
 
@@ -16,6 +22,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             Toast.show("Couldn't update pin history", duration: 3)
         }
         manager.historyStore = .shared
+        lastRetention = (
+            mode: Preferences.shared.historyRetention,
+            days: Preferences.shared.historyCustomDays
+        )
         manager.pruneHistoryIfDue(force: true)
         HotKeyManager.shared.applyFromPreferences()
         NotificationCenter.default.addObserver(
@@ -32,9 +42,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.unregister()
     }
 
-    private var lastRetention: (mode: Preferences.HistoryRetention, days: Double) = (.days30, 30)
-
-    @objc private func preferencesChanged() {
+    @objc func preferencesChanged() {
         HotKeyManager.shared.applyFromPreferences()
         // Retention changes take effect on existing records immediately;
         // other preference edits must not trigger a directory scan.
@@ -70,10 +78,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func hideFocusedPin(_ sender: Any?) {
         focusedPin()?.hidePin()
-        manager.notifyChange()
     }
 
-    private func focusedPin() -> PinWindowController? {
-        (NSApp.keyWindow as? PinPanel)?.pinController
+    func focusedPin(for window: NSWindow? = NSApp.keyWindow) -> PinWindowController? {
+        ((window as? PinPanel) ?? (window?.parent as? PinPanel))?.pinController
     }
 }
