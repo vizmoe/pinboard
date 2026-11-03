@@ -202,7 +202,6 @@ final class ImagePinView: NSView, PinContentDisplaying {
     /// on-screen scale it had before, anchored at the window's top-left.
     func applyCrop(displayScale: (x: CGFloat, y: CGFloat)) {
         updateContentsRect()
-        guard let window else { return }
         let source = sourceRect
         let size = CGSize(
             width: max((source.width * displayScale.x).rounded(), minimumPinSize.width),
