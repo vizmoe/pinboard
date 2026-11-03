@@ -108,14 +108,16 @@ final class AnnotationRendererTests: XCTestCase {
         XCTAssertGreaterThan(onStroke.usingColorSpace(.sRGB)!.redComponent, 0.7)
         XCTAssertGreaterThan(data.count, 1000)
 
-        // Blur and mosaic must actually change the checkerboard underneath.
+        // Solid fill (.blur) and mosaic must actually replace the checkerboard underneath.
         let baseRep = NSBitmapImageRep(cgImage: baseCG)
         for point in [CGPoint(x: 60, y: 60), CGPoint(x: 210, y: 60)] {
             let y = Int(size.height - point.y)
             let before = try XCTUnwrap(baseRep.colorAt(x: Int(point.x), y: y)?.usingColorSpace(.sRGB))
             let after = try XCTUnwrap(rep.colorAt(x: Int(point.x), y: y)?.usingColorSpace(.sRGB))
-            let delta = abs(before.brightnessComponent - after.brightnessComponent)
-            XCTAssertGreaterThan(delta, 0.05, "pixel at \(point) should be filtered")
+            let delta = abs(before.redComponent - after.redComponent)
+                + abs(before.greenComponent - after.greenComponent)
+                + abs(before.blueComponent - after.blueComponent)
+            XCTAssertGreaterThan(delta, 0.1, "pixel at \(point) should be redacted")
         }
     }
 
@@ -158,5 +160,101 @@ final class AnnotationRendererTests: XCTestCase {
         let short = Annotation(tool: .text, points: [.zero], style: style, text: "A")
         let long = Annotation(tool: .text, points: [.zero], style: style, text: "AAAAAAAAAA")
         XCTAssertLessThan(AnnotationRenderer.textSize(for: short).width, AnnotationRenderer.textSize(for: long).width)
+    }
+
+    func testBlurRendersOpaqueSolidColorFillWithoutUnderlyingBleedThrough() throws {
+        let size = CGSize(width: 120, height: 120)
+        let base = NSImage(size: size)
+        base.lockFocus()
+        for row in 0..<8 {
+            for col in 0..<8 {
+                (row + col).isMultiple(of: 2) ? NSColor.black.setFill() : NSColor.white.setFill()
+                NSRect(x: col * 15, y: row * 15, width: 15, height: 15).fill()
+            }
+        }
+        base.unlockFocus()
+        let baseCG = try XCTUnwrap(base.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        let effects = ImageEffects(base: baseCG)
+
+        let style = AnnotationStyle(colorHex: "#2E7D3280", lineWidth: 3, fontSize: 18)
+        let solid = Annotation(tool: .blur, points: [CGPoint(x: 15, y: 15), CGPoint(x: 105, y: 105)], style: style)
+
+        let rep = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: rep))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.draw(baseCG, in: CGRect(origin: .zero, size: size))
+        AnnotationRenderer.draw([solid], imageSize: size, effects: effects, in: context)
+        NSGraphicsContext.restoreGraphicsState()
+
+        // Every pixel inside the covered region must be the exact same opaque solid color,
+        // regardless of whether the underlying checkerboard square was black or white.
+        let sampleA = try XCTUnwrap(rep.colorAt(x: 22, y: 22)?.usingColorSpace(.sRGB))
+        let sampleB = try XCTUnwrap(rep.colorAt(x: 37, y: 22)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(sampleA.redComponent, sampleB.redComponent, accuracy: 0.005)
+        XCTAssertEqual(sampleA.greenComponent, sampleB.greenComponent, accuracy: 0.005)
+        XCTAssertEqual(sampleA.blueComponent, sampleB.blueComponent, accuracy: 0.005)
+        XCTAssertEqual(sampleA.alphaComponent, 1.0, accuracy: 0.005)
+        let expected = try XCTUnwrap(NSColor(hex: "#2E7D32")?.usingColorSpace(.sRGB))
+        XCTAssertEqual(sampleA.greenComponent, expected.greenComponent, accuracy: 0.02)
+    }
+
+    func testMosaicUsesIrreversibleQuantizedScrambledTilesNotBlockAverages() throws {
+        // Two images that differ only by a thin secret glyph stroke inside one tile:
+        // a naive block-averaging filter (CIPixellate) leaks the exact stroke pixel count
+        // as a proportional gray level in that tile. Our irreversible mosaic quantizes and
+        // scrambles across the neighborhood so tile colors are uniform opaque blocks that
+        // do not equal the raw block average.
+        let size = CGSize(width: 160, height: 160)
+        func makeImage(strokeWidth: CGFloat) throws -> CGImage {
+            let image = NSImage(size: size)
+            image.lockFocus()
+            NSColor.white.setFill()
+            NSRect(origin: .zero, size: size).fill()
+            NSColor.systemBlue.setFill()
+            NSRect(x: 20, y: 20, width: 120, height: 120).fill()
+            NSColor.black.setFill()
+            NSRect(x: 62, y: 62, width: strokeWidth, height: 3).fill()
+            image.unlockFocus()
+            return try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        }
+
+        let baseCG = try makeImage(strokeWidth: 4)
+        let effects = ImageEffects(base: baseCG)
+        let mosaicCG = try XCTUnwrap(effects.mosaic(blockSize: 16))
+        let rep = NSBitmapImageRep(cgImage: mosaicCG)
+
+        // All pixels within a 16x16 mosaic tile must share the exact same color.
+        let tileOriginColor = try XCTUnwrap(rep.colorAt(x: 64, y: 64)?.usingColorSpace(.sRGB))
+        let tileInnerColor = try XCTUnwrap(rep.colorAt(x: 75, y: 75)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(tileOriginColor.redComponent, tileInnerColor.redComponent, accuracy: 0.001)
+        XCTAssertEqual(tileOriginColor.greenComponent, tileInnerColor.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(tileOriginColor.blueComponent, tileInnerColor.blueComponent, accuracy: 0.001)
+
+        // Larger blockSize produces larger uniform tiles.
+        let coarseCG = try XCTUnwrap(effects.mosaic(blockSize: 32))
+        let coarseRep = NSBitmapImageRep(cgImage: coarseCG)
+        let c0 = try XCTUnwrap(coarseRep.colorAt(x: 32, y: 32)?.usingColorSpace(.sRGB))
+        let c1 = try XCTUnwrap(coarseRep.colorAt(x: 60, y: 60)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(c0.redComponent, c1.redComponent, accuracy: 0.001)
+        XCTAssertEqual(c0.greenComponent, c1.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(c0.blueComponent, c1.blueComponent, accuracy: 0.001)
+
+        // Sub-quantization stroke changes (e.g. 2px vs 3px thin stroke inside a 16x16 cell)
+        // are absorbed by coarse quantization prior to neighborhood mixing, defeating linear
+        // sub-block ink-density inversion.
+        let baseA = try makeImage(strokeWidth: 2)
+        let baseB = try makeImage(strokeWidth: 3)
+        let repA = NSBitmapImageRep(cgImage: try XCTUnwrap(ImageEffects(base: baseA).mosaic(blockSize: 16)))
+        let repB = NSBitmapImageRep(cgImage: try XCTUnwrap(ImageEffects(base: baseB).mosaic(blockSize: 16)))
+        let colorA = try XCTUnwrap(repA.colorAt(x: 68, y: 68)?.usingColorSpace(.sRGB))
+        let colorB = try XCTUnwrap(repB.colorAt(x: 68, y: 68)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(colorA.redComponent, colorB.redComponent, accuracy: 0.001)
+        XCTAssertEqual(colorA.greenComponent, colorB.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(colorA.blueComponent, colorB.blueComponent, accuracy: 0.001)
     }
 }

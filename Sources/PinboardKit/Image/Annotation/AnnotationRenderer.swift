@@ -104,10 +104,16 @@ enum AnnotationRenderer {
             let size = label.size()
             label.draw(at: CGPoint(x: badge.midX - size.width / 2, y: badge.midY - size.height / 2))
 
-        case .blur, .mosaic:
-            guard let filtered = annotation.tool == .blur ? effects?.blurred : effects?.mosaic else {
-                NSColor.black.withAlphaComponent(0.6).setFill()
-                rect.fill()
+        case .blur:
+            color.withAlphaComponent(1).setFill()
+            NSBezierPath(rect: rect).fill()
+
+        case .mosaic:
+            let baseBlock = max(12, Int(min(imageSize.width, imageSize.height) / 32))
+            let blockSize = max(10, min(64, Int((CGFloat(baseBlock) * max(style.lineWidth, 1) / 3).rounded())))
+            guard let filtered = effects?.mosaic(blockSize: blockSize) else {
+                color.withAlphaComponent(1).setFill()
+                NSBezierPath(rect: rect).fill()
                 return
             }
             let clip = NSBezierPath(rect: rect)
