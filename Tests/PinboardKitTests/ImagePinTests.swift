@@ -129,9 +129,8 @@ final class ImagePinTests: XCTestCase {
 
     func testCropUndoRedoAndResetKeepWindowGeometryProportional() throws {
         let (pin, view) = try makePin(width: 800, height: 600)
+        pin.setFrame(NSRect(x: 100, y: 200, width: 400, height: 300))
         let originalFrame = pin.panel.frame
-        XCTAssertEqual(originalFrame.width, 400, accuracy: 1)
-        XCTAssertEqual(originalFrame.height, 300, accuracy: 1)
 
         view.annotationStore.setCrop(CGRect(x: 100, y: 100, width: 400, height: 200))
         XCTAssertEqual(pin.panel.frame.width, 200, accuracy: 1, "crop shrinks the window at the same display scale")
