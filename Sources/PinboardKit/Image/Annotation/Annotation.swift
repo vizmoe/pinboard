@@ -25,7 +25,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .text: return "textformat"
         case .counter: return "number.circle"
         case .highlight: return "highlighter"
-        case .blur: return "drop.circle"
+        case .blur: return "rectangle.fill"
         case .mosaic: return "squareshape.split.3x3"
         case .crop: return "crop"
         }
@@ -42,7 +42,7 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .text: return "Text"
         case .counter: return "Counter"
         case .highlight: return "Highlight"
-        case .blur: return "Blur"
+        case .blur: return "Solid Fill"
         case .mosaic: return "Mosaic"
         case .crop: return "Crop"
         }
@@ -88,6 +88,12 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .rectangle, .ellipse, .highlight, .blur, .mosaic, .crop: return true
         default: return false
         }
+    }
+
+    /// True for redaction tools (Mosaic and Solid Fill), which share a single
+    /// toolbar entry and switch modes in the contextual properties strip.
+    var isRedaction: Bool {
+        self == .mosaic || self == .blur
     }
 }
 
