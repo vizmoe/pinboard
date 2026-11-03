@@ -9,7 +9,7 @@ final class PinRootView: NSView {
     static let cornerMargin: CGFloat = 14
 
     weak var pinController: PinWindowController?
-    var cornerRadius: CGFloat = 10 { didSet { needsDisplay = true } }
+    var cornerRadius: CGFloat = 12 { didSet { needsDisplay = true } }
     var drawsBackground = true { didSet { needsDisplay = true } }
     var drawsBorder = true { didSet { needsDisplay = true } }
 
@@ -22,9 +22,13 @@ final class PinRootView: NSView {
     var usesHoverBackground = false { didSet { needsDisplay = true } }
     var isEditingContent = false { didSet { needsDisplay = true } }
 
-    private let chrome = PinChromeView()
+    let closeChrome = PinCornerButtonView(symbol: "xmark", tooltip: "Close Pin")
+    let zoomBadge = PinZoomBadgeView()
+    let hideChrome = PinCornerButtonView(symbol: "eye.slash", tooltip: "Hide Pin")
+    let chrome = PinChromeView()
     private var trackingArea: NSTrackingArea?
-    private var isPointerInside = false
+    private(set) var isPointerInside = false
+    private var zoomBadgeHideWorkItem: DispatchWorkItem?
 
     override var isFlipped: Bool { false }
     override var wantsUpdateLayer: Bool { true }
@@ -34,11 +38,22 @@ final class PinRootView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.masksToBounds = true
+        layer?.cornerRadius = cornerRadius
+        layer?.cornerCurve = .continuous
+
         chrome.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(chrome)
+        for overlay in [closeChrome, zoomBadge, hideChrome, chrome] {
+            addSubview(overlay)
+        }
         NSLayoutConstraint.activate([
-            chrome.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            chrome.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8)
+            closeChrome.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            closeChrome.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            zoomBadge.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            zoomBadge.centerXAnchor.constraint(equalTo: centerXAnchor),
+            hideChrome.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            hideChrome.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            chrome.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            chrome.centerXAnchor.constraint(equalTo: centerXAnchor)
         ])
     }
 
@@ -46,7 +61,7 @@ final class PinRootView: NSView {
 
     func install(contentView: NSView) {
         contentView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(contentView, positioned: .below, relativeTo: chrome)
+        addSubview(contentView, positioned: .below, relativeTo: closeChrome)
         NSLayoutConstraint.activate([
             contentView.leadingAnchor.constraint(equalTo: leadingAnchor),
             contentView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -59,8 +74,25 @@ final class PinRootView: NSView {
         chrome.setItems(items)
     }
 
-    func setChromeVisible(_ visible: Bool) {
-        chrome.setVisible(visible)
+    func setChromeVisible(_ visible: Bool, animated: Bool = true) {
+        zoomBadgeHideWorkItem?.cancel()
+        closeChrome.setVisible(visible, animated: animated)
+        zoomBadge.setVisible(visible, animated: animated)
+        hideChrome.setVisible(visible, animated: animated)
+        chrome.setVisible(visible, animated: animated)
+    }
+
+    func showZoomFeedback(percent: Int) {
+        zoomBadge.setPercentage(percent)
+        zoomBadgeHideWorkItem?.cancel()
+        guard !isPointerInside else { return }
+        zoomBadge.setVisible(true, animated: false)
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isPointerInside else { return }
+            self.zoomBadge.setVisible(false, animated: true)
+        }
+        zoomBadgeHideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
     }
 
     // MARK: - Appearance
@@ -68,9 +100,10 @@ final class PinRootView: NSView {
     override func updateLayer() {
         guard let layer else { return }
         layer.cornerRadius = cornerRadius
+        layer.cornerCurve = .continuous
         layer.backgroundColor = effectiveBackgroundColor.cgColor
         layer.borderWidth = drawsBorder ? 1 : 0
-        layer.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
+        layer.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
     }
 
     /// The colour the pin body paints right now.
@@ -127,15 +160,20 @@ final class PinRootView: NSView {
     func cursor(at point: NSPoint) -> NSCursor {
         let edge = resizeEdge(at: point)
         if !edge.isEmpty { return edge.cursor }
-        if chrome.alphaValue > 0.01, chrome.frame.insetBy(dx: -2, dy: -2).contains(point) { return .arrow }
+        for overlay in [closeChrome, zoomBadge, hideChrome, chrome] where overlay.alphaValue > 0.01 {
+            if overlay.frame.insetBy(dx: -2, dy: -2).contains(point) { return .arrow }
+        }
         return pinController?.contentView.cursor(at: point) ?? .arrow
     }
 
-    // MARK: - Pinch to zoom
+    // MARK: - Trackpad zoom
 
     override func magnify(with event: NSEvent) {
-        guard event.magnification != 0 else { return }
-        pinController?.zoom(by: 1 + event.magnification)
+        pinController?.handleMagnify(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        pinController?.handleScrollWheel(with: event)
     }
 
     // MARK: - Hit testing & mouse

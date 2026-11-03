@@ -113,7 +113,11 @@ final class ImagePinView: NSView, PinContentDisplaying {
     }
 
     override func magnify(with event: NSEvent) {
-        pinController?.zoom(by: 1 + event.magnification)
+        pinController?.handleMagnify(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        pinController?.handleScrollWheel(with: event)
     }
 
     // MARK: - Annotation mode
@@ -298,6 +302,7 @@ final class ImagePinView: NSView, PinContentDisplaying {
         frame.size = size
         window.setFrame(frame, display: true)
         window.invalidateShadow()
+        pinController?.syncBaseSizeToCurrentFrame()
     }
 
     // MARK: - Export

@@ -183,6 +183,55 @@ final class PinWindowManagerTests: XCTestCase {
         pin.zoom(by: 0.0001)
         XCTAssertGreaterThanOrEqual(pin.panel.frame.width, pin.contentView.minimumPinSize.width - 1)
     }
+
+    func testSmoothIncrementalZoomPreservesExactCentreAndUpdatesZoomBadgeAndReset() {
+        let pin = manager.createPin(content: textContent("smooth zoom"))
+        pin.setFrame(NSRect(x: 200, y: 200, width: 300, height: 200))
+        let centre = CGPoint(x: pin.panel.frame.midX, y: pin.panel.frame.midY)
+        XCTAssertEqual(pin.zoomPercentage, 100)
+        XCTAssertEqual(pin.rootView.zoomBadge.percentage, 100)
+
+        // Simulate 80 high-frequency trackpad steps with a small 0.5% delta per frame.
+        // Without unrounded floating-point state, 300 * 1.005 = 301.5 would round
+        // independently on each step and drift the centre and aspect ratio.
+        for _ in 0..<80 {
+            pin.zoom(by: 1.005, isContinuousGesture: true)
+        }
+        let expectedScale = pow(1.005, 80.0)
+        XCTAssertEqual(pin.panel.frame.width, 300 * expectedScale, accuracy: 2)
+        XCTAssertEqual(pin.panel.frame.width / pin.panel.frame.height, 1.5, accuracy: 0.01)
+        XCTAssertEqual(pin.panel.frame.midX, centre.x, accuracy: 0.5, "incremental zoom must not walk the window centre")
+        XCTAssertEqual(pin.panel.frame.midY, centre.y, accuracy: 0.5)
+        XCTAssertEqual(pin.rootView.zoomBadge.percentage, Int((expectedScale * 100).rounded()))
+
+        pin.resetZoom()
+        XCTAssertEqual(pin.panel.frame.size, CGSize(width: 300, height: 200))
+        XCTAssertEqual(pin.panel.frame.midX, centre.x, accuracy: 1)
+        XCTAssertEqual(pin.panel.frame.midY, centre.y, accuracy: 1)
+        XCTAssertEqual(pin.zoomPercentage, 100)
+        XCTAssertEqual(pin.rootView.zoomBadge.percentage, 100)
+    }
+
+    func testCleanShotChromeLayoutAndContinuousRoundedWindowCorners() {
+        let pin = manager.createPin(content: .image(TestImage.make(width: 400, height: 300)))
+        pin.setFrame(NSRect(x: 100, y: 100, width: 300, height: 200))
+        let root = pin.rootView
+        root.layoutSubtreeIfNeeded()
+        root.updateLayer()
+
+        XCTAssertEqual(root.cornerRadius, 12)
+        XCTAssertEqual(root.layer?.cornerCurve, .continuous)
+
+        // Top-left Close, top-center Zoom badge, top-right Hide, bottom-center actions.
+        XCTAssertLessThan(root.closeChrome.frame.minX, 20)
+        XCTAssertGreaterThan(root.closeChrome.frame.maxY, root.bounds.height - 40)
+        XCTAssertEqual(root.zoomBadge.frame.midX, root.bounds.midX, accuracy: 1)
+        XCTAssertGreaterThan(root.zoomBadge.frame.maxY, root.bounds.height - 40)
+        XCTAssertGreaterThan(root.hideChrome.frame.maxX, root.bounds.width - 20)
+        XCTAssertGreaterThan(root.hideChrome.frame.maxY, root.bounds.height - 40)
+        XCTAssertEqual(root.chrome.frame.midX, root.bounds.midX, accuracy: 1)
+        XCTAssertLessThan(root.chrome.frame.minY, 20)
+    }
 }
 
 final class PinRootViewTests: XCTestCase {
