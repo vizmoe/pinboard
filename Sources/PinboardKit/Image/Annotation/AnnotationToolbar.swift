@@ -193,9 +193,12 @@ final class AnnotationToolbar: AttachedToolbar {
     }
 
     @objc private func fontSizeChanged() {
+        guard let canvas else { return }
         let value = CGFloat(sizeField.doubleValue)
         guard value >= 6, value <= 400 else { return syncSelection() }
-        canvas?.updateSelectedStyle { $0.fontSize = value }
+        canvas.commitTextEditor()
+        if canvas.selectedAnnotation == nil { Preferences.shared.annotationFontSize = Double(value) }
+        canvas.updateSelectedStyle { $0.fontSize = value }
     }
 
     @objc private func undo() { canvas?.commitTextEditor(); canvas?.store.undoManager.undo(); syncSelection() }

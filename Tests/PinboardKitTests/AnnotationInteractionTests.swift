@@ -75,4 +75,32 @@ final class AnnotationInteractionTests: XCTestCase {
         store.undoManager.redo()
         XCTAssertEqual(store.annotations, [annotation])
     }
+
+    func testClickingHandleWithoutDraggingDoesNotMutateOrAddUndoStep() throws {
+        let manager = PinWindowManager.shared
+        let pin = manager.createPin(content: .image(TestImage.make(width: 400, height: 200)))
+        defer { manager.closeAll() }
+        let image = try XCTUnwrap(pin.contentView as? ImagePinView)
+        image.beginAnnotating()
+        let canvas = try XCTUnwrap(image.subviews.compactMap { $0 as? AnnotationCanvasView }.first)
+        let original = Annotation(tool: .arrow, points: [CGPoint(x: 50, y: 60), CGPoint(x: 150, y: 60)], style: .current())
+        image.annotationStore.add(original)
+        image.annotationStore.undoManager.removeAllActions()
+        canvas.selectAnnotation(id: original.id)
+
+        // Click 4 points away from the handle (within the 7pt hit radius) and release without dragging.
+        let handleView = canvas.viewPoint(from: original.points[1])
+        let clickLocation = canvas.convert(NSPoint(x: handleView.x + 4, y: handleView.y), to: nil)
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: clickLocation, modifierFlags: [], timestamp: 0,
+                windowNumber: pin.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        NSApp.postEvent(try event(.leftMouseUp), atStart: false)
+        canvas.mouseDown(with: try event(.leftMouseDown))
+
+        XCTAssertEqual(image.annotationStore.annotations, [original],
+                       "clicking a handle without dragging must not shift the endpoint")
+        XCTAssertFalse(image.annotationStore.undoManager.canUndo,
+                       "clicking a handle without dragging must not record an undo step")
+    }
 }

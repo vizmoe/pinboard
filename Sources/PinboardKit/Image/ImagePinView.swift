@@ -42,9 +42,11 @@ final class ImagePinView: NSView, PinContentDisplaying {
 
     private var pixelSize: CGSize { baseImage.pixelSize }
     private var sourceRect: CGRect { annotationStore.cropRect ?? CGRect(origin: .zero, size: pixelSize) }
+    private var displayedSourceSize: CGSize
 
     init(image: NSImage, annotations: AnnotationStore.Payload? = nil) {
         baseImage = image
+        displayedSourceSize = image.pixelSize
         baseCGImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         effects = baseCGImage.map(ImageEffects.init(base:))
         canvas = AnnotationCanvasView(store: annotationStore, imageSize: image.pixelSize, effects: effects)
@@ -153,8 +155,17 @@ final class ImagePinView: NSView, PinContentDisplaying {
     }
 
     func refreshAfterStoreChange() {
+        let previousSize = displayedSourceSize
+        displayedSourceSize = sourceRect.size
         canvas.reconcileSelection()
         updateContentsRect()
+        if previousSize != displayedSourceSize,
+           previousSize.width > 0, previousSize.height > 0,
+           let window {
+            let scaleX = window.frame.width / previousSize.width
+            let scaleY = window.frame.height / previousSize.height
+            applyCrop(displayScale: (x: scaleX, y: scaleY))
+        }
         canvas.needsDisplay = true
         annotationToolbar?.syncSelection()
     }
