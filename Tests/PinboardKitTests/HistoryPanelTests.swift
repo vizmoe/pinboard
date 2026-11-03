@@ -173,4 +173,51 @@ final class HistoryPanelTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), "keep")
         XCTAssertNotNil(store.record(id: id))
     }
+
+    func testLongTextDetailExtendsBeyondViewportForScrollingAndPlainTextUsesDynamicLabelColor() throws {
+        let longText = (1...30).map { "Line \($0): searchable history detail content that wraps across multiple lines." }.joined(separator: "\n")
+        // Simulate a plain-text record whose RTF payload was saved with a static black color.
+        let staticBlack = NSAttributedString(string: longText, attributes: [
+            .font: TextDefaults.font,
+            .foregroundColor: NSColor.black
+        ])
+        let id = try store.upsert(content: .text(staticBlack), textMode: .plainText)
+        try select(id)
+
+        XCTAssertEqual(panel.detailScrollView.frame.height, 224)
+        XCTAssertGreaterThan(panel.detailTextView.frame.height, panel.detailScrollView.contentSize.height + 100,
+                             "long text must size taller than the 224pt scroll viewport so it can scroll")
+        let color = panel.detailTextView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        XCTAssertEqual(color, .labelColor, "plain text preview must use dynamic labelColor rather than static RTF colors")
+    }
+
+    func testDetailPreviewRefreshesWhenPanelAppearanceChanges() throws {
+        let id = try store.upsert(content: .image(TestImage.make(width: 120, height: 80, color: .init(srgbRed: 1, green: 0, blue: 0, alpha: 0.4))))
+        try select(id)
+        panel.view.appearance = NSAppearance(named: .aqua)
+        (panel.view as? MenuBarPanelRootView)?.viewDidChangeEffectiveAppearance()
+        let light = try XCTUnwrap(panel.detailImageView.image?.pngData())
+
+        panel.view.appearance = NSAppearance(named: .darkAqua)
+        (panel.view as? MenuBarPanelRootView)?.viewDidChangeEffectiveAppearance()
+        let dark = try XCTUnwrap(panel.detailImageView.image?.pngData())
+        XCTAssertNotEqual(light, dark, "appearance changes must re-render the history detail preview")
+    }
+
+    func testMissingOrCorruptImagePayloadReportsHistoryError() throws {
+        let id = try store.upsert(content: .image(TestImage.make(width: 20, height: 20, color: .blue)))
+        let imageURL = directory.appendingPathComponent(id.uuidString).appendingPathComponent("image.png")
+        try Data("not-a-png".utf8).write(to: imageURL)
+
+        var errors = 0
+        manager.onHistoryError = { _ in errors += 1 }
+        try select(id)
+        XCTAssertTrue(panel.detailScrollView.isHidden)
+        XCTAssertEqual(errors, 1)
+
+        try click("Copy")
+        XCTAssertEqual(errors, 2)
+        XCTAssertNil(manager.repin(recordID: id))
+        XCTAssertEqual(errors, 3)
+    }
 }

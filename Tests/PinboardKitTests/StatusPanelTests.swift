@@ -398,4 +398,46 @@ final class StatusPanelTests: XCTestCase {
                 .write(to: directory.appendingPathComponent("pins-panel.png"))
         }
     }
+
+    func testReopeningOnHistoryFlushesPendingPinEditsAndPreservesNavigationSelection() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            manager.closeAll()
+            manager.historyStore = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let store = HistoryStore(directory: directory)
+        manager.historyStore = store
+        let pin = manager.createPin(content: .text(NSAttributedString(string: "Initial")), textMode: .plainText)
+        let recordID = try XCTUnwrap(pin.historyRecordID)
+
+        anchor.performClick(nil)
+        try clickVisible("History")
+        let history = try XCTUnwrap(controller.historyViewController)
+        let pinsButtons = buttons(in: controller.pinsViewController.view).filter {
+            ["Pins", "History"].contains($0.identifier?.rawValue ?? "")
+        }
+        XCTAssertEqual(pinsButtons.filter { $0.state == .on }.map { $0.identifier?.rawValue }, ["Pins"],
+                       "leaving Pins for History must not leave both navigation icons selected on the Pins toolbar")
+
+        // Close while on History, edit the live pin without flushing the debounce, then reopen.
+        anchor.performClick(nil)
+        XCTAssertFalse(controller.popover.isShown)
+        let textView = try XCTUnwrap(pin.contentView as? TextPinView)
+        textView.beginEditing(at: nil)
+        textView.editableTextView.insertText("Edited while closed", replacementRange: NSRange(location: 0, length: 7))
+
+        anchor.performClick(nil)
+        XCTAssertTrue(controller.popover.isShown)
+        XCTAssertEqual(store.record(id: recordID)?.text, "Edited while closed",
+                       "reopening on History must flush pending pin edits")
+        XCTAssertEqual(history.records.first?.text, "Edited while closed")
+
+        try clickVisible("Pins")
+        let historyButtons = buttons(in: history.view).filter {
+            ["Pins", "History"].contains($0.identifier?.rawValue ?? "")
+        }
+        XCTAssertEqual(historyButtons.filter { $0.state == .on }.map { $0.identifier?.rawValue }, ["History"],
+                       "returning to Pins must not leave both navigation icons selected on the History toolbar")
+    }
 }

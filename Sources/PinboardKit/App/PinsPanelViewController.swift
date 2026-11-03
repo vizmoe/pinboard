@@ -3,11 +3,11 @@ import AppKit
 /// A scrollable list with fixed bulk controls and utility actions. Rows are
 /// reused by UUID so updates preserve scrolling and keyboard focus.
 final class PinsPanelViewController: NSViewController {
-    enum UtilityAction { case paste, history, settings, quit }
+    typealias UtilityAction = MenuBarUtilityAction
     enum PinAction { case show, hide, close }
 
     private let manager: PinWindowManager
-    var onUtilityAction: ((UtilityAction) -> Void)?
+    var onUtilityAction: ((MenuBarUtilityAction) -> Void)?
     var onDismiss: (() -> Void)?
     private(set) var rows: [PinRowView] = []
     let scrollView = NSScrollView()
@@ -92,8 +92,6 @@ final class PinsPanelViewController: NSViewController {
             view.effectiveAppearance.performAsCurrentDrawingAppearance { row.update(from: pin) }
             return row
         }
-        toolbar.pinsButton.state = .on
-        toolbar.historyButton.state = .off
         let count = manager.count
         view.setAccessibilityLabel("Pins: \(count) total, \(manager.visibleCount) visible")
         showAllButton.isEnabled = count > 0

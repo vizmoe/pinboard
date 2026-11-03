@@ -1,5 +1,10 @@
 import AppKit
 
+/// Shared actions in the menu bar popover's fixed top strip.
+enum MenuBarUtilityAction {
+    case paste, history, settings, quit
+}
+
 /// Icon actions keep a stable identifier, spoken name, tooltip and keyboard focus
 /// even though the visible label is omitted.
 final class PanelIconButton: NSButton {
@@ -77,6 +82,7 @@ final class MenuBarPanelToolbar: NSView {
     let pasteButton = PanelIconButton("Pin Clipboard", symbol: "plus")
     let settingsButton = PanelIconButton("Settings", symbol: "gearshape")
     let quitButton = PanelIconButton("Quit", symbol: "power")
+    private let showingHistory: Bool
     private var actions: [NSButton] = []
     var onPins: (() -> Void)?
     var onHistory: (() -> Void)?
@@ -85,9 +91,9 @@ final class MenuBarPanelToolbar: NSView {
     var onQuit: (() -> Void)?
 
     init(showingHistory: Bool) {
+        self.showingHistory = showingHistory
         super.init(frame: .zero)
-        pinsButton.state = showingHistory ? .off : .on
-        historyButton.state = showingHistory ? .on : .off
+        syncNavigationState()
         pasteButton.isProminent = true
         for (button, action) in [(pinsButton, #selector(pins)), (historyButton, #selector(history)),
                                   (pasteButton, #selector(paste)), (settingsButton, #selector(settings)),
@@ -100,6 +106,11 @@ final class MenuBarPanelToolbar: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
     override var isFlipped: Bool { true }
+
+    private func syncNavigationState() {
+        pinsButton.state = showingHistory ? .off : .on
+        historyButton.state = showingHistory ? .on : .off
+    }
 
     func setActions(_ buttons: [NSButton]) {
         guard actions != buttons else { return }
@@ -121,8 +132,8 @@ final class MenuBarPanelToolbar: NSView {
         quitButton.frame = NSRect(x: bounds.width - 26, y: 0, width: 26, height: 26)
     }
 
-    @objc private func pins() { pinsButton.state = .on; onPins?() }
-    @objc private func history() { historyButton.state = .on; onHistory?() }
+    @objc private func pins() { syncNavigationState(); onPins?() }
+    @objc private func history() { syncNavigationState(); onHistory?() }
     @objc private func paste() { onPaste?() }
     @objc private func settings() { onSettings?() }
     @objc private func quit() { onQuit?() }

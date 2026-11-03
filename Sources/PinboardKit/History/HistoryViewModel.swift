@@ -45,23 +45,33 @@ final class HistoryViewModel {
             } else {
                 pasteboard.writeObjects([attributed])
             }
-        case .image(let image):
+        case .image:
             // Copy the composited result (crop + annotations), matching what
             // the user would get by copying the live pin.
-            var output = image
-            if let annotationData = entry.annotationData {
-                let imagePin = ImagePinView(image: image)
-                do {
-                    try imagePin.restoreAnnotations(annotationData)
-                } catch {
-                    manager.onHistoryError?(error)
-                    return
-                }
-                output = imagePin.renderedImage()
+            let output: NSImage
+            do {
+                guard let rendered = try renderedImage(from: entry) else { return }
+                output = rendered
+            } catch {
+                manager.onHistoryError?(error)
+                return
             }
             pasteboard.clearContents()
             pasteboard.writeObjects([output])
         }
+    }
+
+    func renderedImage(from state: PinContentState, fitting maxSize: CGSize? = nil) throws -> NSImage? {
+        guard case .image(let image) = state.content else { return nil }
+        if maxSize == nil, state.annotationData == nil { return image }
+        let imagePin = ImagePinView(image: image)
+        if let annotationData = state.annotationData {
+            try imagePin.restoreAnnotations(annotationData)
+        }
+        if let maxSize {
+            return imagePin.menuPreview(fitting: maxSize)
+        }
+        return imagePin.renderedImage()
     }
 
     func delete(_ id: HistoryRecord.ID) {
