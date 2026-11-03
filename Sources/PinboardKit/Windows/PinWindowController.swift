@@ -29,6 +29,13 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// content's natural ratio. Can be switched on per pin from the menu.
     var isAspectLocked = false
 
+    /// Reference 100% size for the zoom badge and reset-zoom action.
+    private(set) var baseSize: CGSize = .zero
+    private var zoomCurrentSize: CGSize = .zero
+    private var zoomAnchorCenter: CGPoint = .zero
+    private var lastZoomTimestamp: TimeInterval = 0
+    private var shadowInvalidateWorkItem: DispatchWorkItem?
+
     init(content: PinContent, id: UUID = UUID(), annotations: AnnotationStore.Payload? = nil, textMode: TextContentMode? = nil) {
         self.id = id
         self.kind = content.kind
@@ -51,7 +58,10 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         // `applyPreferences` at the end of init paints the Markdown theme's
         // paper instead, when the theme has one.
         rootView.usesHoverBackground = kind == .text
-        rootView.cornerRadius = 6
+        rootView.cornerRadius = 12
+        rootView.closeChrome.onAction = { [weak self] in self?.closePin() }
+        rootView.hideChrome.onAction = { [weak self] in self?.hidePin() }
+        rootView.zoomBadge.onResetZoom = { [weak self] in self?.resetZoom() }
         rootView.install(contentView: contentView)
         panel.contentView = rootView
         panel.pinController = self
@@ -83,8 +93,20 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     }
 
     func setFrame(_ frame: NSRect) {
+        baseSize = frame.size
+        zoomCurrentSize = frame.size
+        zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
         panel.setFrame(frame, display: true)
         panel.invalidateShadow()
+        rootView.zoomBadge.setPercentage(zoomPercentage)
+    }
+
+    func syncBaseSizeToCurrentFrame() {
+        let frame = panel.frame
+        baseSize = frame.size
+        zoomCurrentSize = frame.size
+        zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        rootView.zoomBadge.setPercentage(100)
     }
 
     /// Grows the window so content that arrived after creation (an image
@@ -115,24 +137,124 @@ final class PinWindowController: NSObject, NSWindowDelegate {
             minSize: contentView.minimumPinSize,
             aspectRatio: isAspectLocked ? contentView.contentAspectRatio : nil
         )
+        zoomCurrentSize = panel.frame.size
+        zoomAnchorCenter = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
+        rootView.zoomBadge.setPercentage(zoomPercentage)
     }
 
-    /// Uniform zoom around the window centre, used by the trackpad pinch
-    /// gesture. Scales the current frame, so a freely resized window keeps the
-    /// proportions the user gave it.
-    func zoom(by factor: CGFloat) {
-        guard factor > 0 else { return }
+    var zoomPercentage: Int {
+        let referenceWidth = baseSize.width > 1 ? baseSize.width : panel.frame.width
+        let currentWidth = zoomCurrentSize.width > 1 ? zoomCurrentSize.width : panel.frame.width
+        guard referenceWidth > 1 else { return 100 }
+        return max(1, Int(((currentWidth / referenceWidth) * 100).rounded()))
+    }
+
+    func resetZoom() {
+        guard baseSize.width > 1, baseSize.height > 1 else { return }
         let frame = panel.frame
+        zoomCurrentSize = baseSize
+        zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        let origin = CGPoint(
+            x: (frame.midX - baseSize.width / 2).rounded(),
+            y: (frame.midY - baseSize.height / 2).rounded()
+        )
+        panel.setFrame(NSRect(origin: origin, size: baseSize), display: true)
+        panel.invalidateShadow()
+        rootView.showZoomFeedback(percent: 100)
+    }
+
+    func handleMagnify(with event: NSEvent) {
+        if event.phase == .began {
+            let frame = panel.frame
+            zoomCurrentSize = frame.size
+            zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        }
+        if event.magnification != 0 {
+            zoom(by: 1 + event.magnification, isContinuousGesture: true)
+        }
+        if event.phase == .ended || event.phase == .cancelled {
+            flushShadowInvalidation()
+        }
+    }
+
+    func handleScrollWheel(with event: NSEvent) {
+        guard !rootView.isEditingContent || event.modifierFlags.contains(.command) else { return }
+        if event.phase == .began {
+            let frame = panel.frame
+            zoomCurrentSize = frame.size
+            zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        }
+        let rawDelta: CGFloat
+        if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
+            rawDelta = event.scrollingDeltaX
+        } else {
+            rawDelta = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
+        }
+        guard abs(rawDelta) > 0.01 else { return }
+        let sensitivity: CGFloat = event.hasPreciseScrollingDeltas ? 0.0045 : 0.03
+        let factor = max(0.7, min(1.3, 1 + rawDelta * sensitivity))
+        let isContinuous = event.phase != [] || event.momentumPhase != []
+        zoom(by: factor, isContinuousGesture: isContinuous)
+        if event.phase == .ended || event.momentumPhase == .ended {
+            flushShadowInvalidation()
+        }
+    }
+
+    /// Uniform zoom around the window centre, used by the trackpad pinch and
+    /// two-finger swipe gestures. Keeps unrounded floating-point state across
+    /// continuous steps so the centre and aspect ratio never drift.
+    func zoom(by factor: CGFloat, isContinuousGesture: Bool = false) {
+        guard factor > 0 else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let frame = panel.frame
+        if baseSize.width <= 0 || baseSize.height <= 0 {
+            baseSize = frame.size
+        }
+        if now - lastZoomTimestamp > 0.25 || zoomCurrentSize.width <= 0 || zoomCurrentSize.height <= 0 {
+            zoomCurrentSize = frame.size
+            zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        }
+        lastZoomTimestamp = now
+
         let minSize = contentView.minimumPinSize
         let visible = (panel.screen ?? NSScreen.underMouse)?.visibleFrame.size ?? CGSize(width: 4000, height: 3000)
-        let lower = max(minSize.width / frame.width, minSize.height / frame.height)
-        let upper = max(lower, min(visible.width / frame.width, visible.height / frame.height))
+        let lower = max(minSize.width / zoomCurrentSize.width, minSize.height / zoomCurrentSize.height)
+        let upper = max(lower, min(visible.width / zoomCurrentSize.width, visible.height / zoomCurrentSize.height))
         let clamped = min(max(factor, lower), upper)
         guard abs(clamped - 1) > 0.0001 else { return }
 
-        let size = CGSize(width: (frame.width * clamped).rounded(), height: (frame.height * clamped).rounded())
-        let origin = CGPoint(x: (frame.midX - size.width / 2).rounded(), y: (frame.midY - size.height / 2).rounded())
+        zoomCurrentSize = CGSize(
+            width: zoomCurrentSize.width * clamped,
+            height: zoomCurrentSize.height * clamped
+        )
+        let size = isContinuousGesture
+            ? zoomCurrentSize
+            : CGSize(width: zoomCurrentSize.width.rounded(), height: zoomCurrentSize.height.rounded())
+        let origin = isContinuousGesture
+            ? CGPoint(x: zoomAnchorCenter.x - size.width / 2, y: zoomAnchorCenter.y - size.height / 2)
+            : CGPoint(x: (zoomAnchorCenter.x - size.width / 2).rounded(), y: (zoomAnchorCenter.y - size.height / 2).rounded())
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        rootView.showZoomFeedback(percent: zoomPercentage)
+
+        if isContinuousGesture {
+            scheduleShadowInvalidation()
+        } else {
+            flushShadowInvalidation()
+        }
+    }
+
+    private func scheduleShadowInvalidation() {
+        shadowInvalidateWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.panel.invalidateShadow()
+        }
+        shadowInvalidateWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    private func flushShadowInvalidation() {
+        shadowInvalidateWorkItem?.cancel()
+        shadowInvalidateWorkItem = nil
         panel.invalidateShadow()
     }
 
@@ -217,13 +339,8 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         items.append(ChromeItem(symbol: "doc.on.doc", tooltip: "Copy") { [weak self] in
             self?.contentView.copyToPasteboard()
         })
-        items.append(ChromeItem(symbol: "eye.slash", tooltip: "Hide Pin") { [weak self] in
-            self?.hidePin()
-        })
-        items.append(ChromeItem(symbol: "xmark", tooltip: "Close Pin") { [weak self] in
-            self?.closePin()
-        })
         rootView.setChromeItems(items)
+        rootView.zoomBadge.setPercentage(zoomPercentage)
     }
 
     func makeContextMenu() -> NSMenu {

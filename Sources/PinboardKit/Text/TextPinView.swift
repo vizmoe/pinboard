@@ -13,7 +13,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     /// network, and the view re-resolves after every re-render.
     var imageLoader: RemoteImageFetching = RemoteImageLoader.shared
 
-    private let scrollView = NSScrollView()
+    private let scrollView = PinScrollView()
     private let textView: PinTextView
     private let textUndoManager = UndoManager()
     private(set) var isEditing = false
@@ -127,6 +127,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
         textView.pinView = self
         textView.delegate = self
+        scrollView.pinView = self
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -790,7 +791,7 @@ final class PinTextView: NSTextView {
     }
 
     override func magnify(with event: NSEvent) {
-        pinView?.pinController?.zoom(by: 1 + event.magnification)
+        pinView?.pinController?.handleMagnify(with: event)
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -805,5 +806,26 @@ final class PinTextView: NSTextView {
         if let pinView { pinView.contextMenuItems().forEach { menu.addItem($0) } }
         controller.appendPinItems(to: menu, includingContentItems: false)
         return menu
+    }
+}
+
+/// Scroll view that forwards trackpad pinch and horizontal/non-overflow
+/// two-finger swipe gestures to the pin window's zoom controller.
+final class PinScrollView: NSScrollView {
+    weak var pinView: TextPinView?
+
+    override func magnify(with event: NSEvent) {
+        pinView?.pinController?.handleMagnify(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let pinView else { return super.scrollWheel(with: event) }
+        let overflowsVertically = (documentView?.frame.height ?? 0) > contentSize.height + 1
+        let isHorizontalSwipe = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+        if event.modifierFlags.contains(.command) || (!pinView.isEditing && (isHorizontalSwipe || !overflowsVertically)) {
+            pinView.pinController?.handleScrollWheel(with: event)
+            return
+        }
+        super.scrollWheel(with: event)
     }
 }
