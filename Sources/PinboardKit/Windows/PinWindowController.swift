@@ -139,15 +139,18 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     // MARK: - Visibility
 
     func present() {
+        let wasHidden = isPinHidden
         isPinHidden = false
         panel.orderFrontRegardless()
         panel.invalidateShadow()
+        if wasHidden { manager?.notifyChange() }
     }
 
     func showPin() {
         guard isPinHidden else { return }
         isPinHidden = false
         panel.orderFrontRegardless()
+        manager?.notifyChange()
     }
 
     func hidePin() {
@@ -155,6 +158,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         endEditing()
         isPinHidden = true
         panel.orderOut(nil)
+        manager?.notifyChange()
     }
 
     var isPinVisible: Bool { !isPinHidden && panel.isVisible }
@@ -215,7 +219,6 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         })
         items.append(ChromeItem(symbol: "eye.slash", tooltip: "Hide Pin") { [weak self] in
             self?.hidePin()
-            self?.manager?.notifyChange()
         })
         items.append(ChromeItem(symbol: "xmark", tooltip: "Close Pin") { [weak self] in
             self?.closePin()
@@ -252,7 +255,6 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         menu.addItem(.separator())
         menu.addItem(actionItem("Hide Pin") { [weak self] in
             self?.hidePin()
-            self?.manager?.notifyChange()
         })
         menu.addItem(actionItem("Close Pin") { [weak self] in self?.closePin() })
     }

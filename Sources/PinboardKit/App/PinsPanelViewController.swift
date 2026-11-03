@@ -122,7 +122,6 @@ final class PinsPanelViewController: NSViewController {
         case .hide: pin.hidePin()
         case .close: pin.closePin()
         }
-        manager.notifyChange()
         reloadPins()
     }
 
