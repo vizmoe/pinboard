@@ -164,4 +164,47 @@ final class AnnotationToolbarTests: XCTestCase {
         XCTAssertTrue(textStyleControl.sendAction(textStyleControl.action, to: textStyleControl.target))
         XCTAssertEqual(canvas.style.textStyle, .box)
     }
+
+    func testSecondaryPropertiesRowIsHorizontallyCenteredAcrossAllToolsAndModes() throws {
+        let (view, canvas, _) = try makeEditor()
+        let toolbar = try XCTUnwrap(view.annotationToolbar)
+        let properties = try XCTUnwrap(toolbar.stack.arrangedSubviews.last as? NSStackView)
+
+        let states: [(String, () -> Void)] = [
+            ("rectangle", { canvas.tool = .rectangle }),
+            ("ellipse", { canvas.tool = .ellipse }),
+            ("arrow", { canvas.tool = .arrow }),
+            ("line", { canvas.tool = .line }),
+            ("freehand", { canvas.tool = .freehand }),
+            ("text", { canvas.tool = .text }),
+            ("counter", { canvas.tool = .counter }),
+            ("highlight-rect", { canvas.style.highlightMode = .rectangle; canvas.tool = .highlight }),
+            ("highlight-freehand", { canvas.style.highlightMode = .freehand; canvas.tool = .highlight }),
+            ("redact-mosaic", { canvas.style.redactionStyle = .mosaic; canvas.tool = .mosaic }),
+            ("redact-blur", { canvas.style.redactionStyle = .blur; canvas.tool = .mosaic }),
+            ("redact-solid", { canvas.style.redactionStyle = .solid; canvas.tool = .blur }),
+            ("spotlight", { canvas.tool = .spotlight })
+        ]
+
+        for (name, applyState) in states {
+            applyState()
+            toolbar.syncSelection()
+            toolbar.panel.contentView?.layoutSubtreeIfNeeded()
+            XCTAssertFalse(properties.isHidden, "\(name) should show secondary properties")
+
+            let visibleControls = properties.arrangedSubviews.filter { !$0.isHidden }
+            XCTAssertFalse(visibleControls.isEmpty, "\(name) should have visible property controls")
+            for control in visibleControls where control is NSSegmentedControl {
+                XCTAssertLessThanOrEqual(control.frame.width, 110, "\(name): segmented control must hug its segments")
+            }
+            let propertiesInStack = properties.convert(properties.bounds, to: toolbar.stack)
+            XCTAssertEqual(propertiesInStack.midX, toolbar.stack.bounds.midX, accuracy: 2.0,
+                           "\(name): secondary properties stack must be centered in the toolbar")
+            let unionRect = visibleControls
+                .map { $0.convert($0.bounds, to: toolbar.stack) }
+                .reduce(into: CGRect.null) { $0 = $0.union($1) }
+            XCTAssertEqual(unionRect.midX, toolbar.stack.bounds.midX, accuracy: 2.0,
+                           "\(name): secondary property controls must be horizontally centered in the toolbar")
+        }
+    }
 }

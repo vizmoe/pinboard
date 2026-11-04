@@ -62,6 +62,10 @@ final class AnnotationToolbar: AttachedToolbar {
         control.selectedSegment = 0
         control.target = self
         control.action = action
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        control.setContentCompressionResistancePriority(.required, for: .horizontal)
+        control.widthAnchor.constraint(equalToConstant: control.fittingSize.width).isActive = true
         control.isHidden = true
     }
 
@@ -127,14 +131,20 @@ final class AnnotationToolbar: AttachedToolbar {
             }
         }
         properties.orientation = .horizontal
+        properties.alignment = .centerY
+        properties.distribution = .fill
         properties.spacing = 6
+        properties.setHuggingPriority(.required, for: .horizontal)
         properties.addArrangedSubview(redactionModeControl)
         properties.addArrangedSubview(spotlightShapeControl)
         properties.addArrangedSubview(highlightModeControl)
         properties.addArrangedSubview(colorSwatch)
 
         fontControls.orientation = .horizontal
+        fontControls.alignment = .centerY
+        fontControls.distribution = .fill
         fontControls.spacing = 4
+        fontControls.setHuggingPriority(.required, for: .horizontal)
         fontControls.addArrangedSubview(textStyleControl)
         familyPopUp.addItems(withTitles: NSFontManager.shared.availableFontFamilies)
         familyPopUp.target = self
@@ -303,13 +313,14 @@ final class AnnotationToolbar: AttachedToolbar {
             widthSlider.toolTip = "Line Width"
         }
 
-        let family = effectiveStyle.fontName ?? NSFont.systemFont(ofSize: 1).familyName ?? "Helvetica"
+        let family = effectiveStyle.fontName ?? TextDefaults.font.familyName ?? "Helvetica"
         familyPopUp.selectItem(withTitle: family)
         if familyPopUp.selectedItem == nil { familyPopUp.setTitle(family) }
         sizeField.stringValue = String(Int(effectiveStyle.fontSize))
         undoButton.isEnabled = canvas.store.undoManager.canUndo
         redoButton.isEnabled = canvas.store.undoManager.canRedo
         deleteButton.isEnabled = canvas.selectedAnnotation != nil
+        panel.contentView?.layoutSubtreeIfNeeded()
         panel.setContentSize(panel.contentView?.fittingSize ?? panel.frame.size)
         reposition()
     }
