@@ -2,7 +2,7 @@ import AppKit
 
 /// Floating tool strip attached to an image pin while it is in edit mode.
 /// Lives in a child panel so it never covers the image or shrinks with it.
-final class AnnotationToolbar: AttachedToolbar {
+final class AnnotationToolbar: AttachedToolbar, NSComboBoxDelegate {
     private var toolButtons: [AnnotationTool: NSButton] = [:]
     private let colorSwatch = ColorSwatchButton(tooltip: "Color")
     private let widthSlider = AnnotationWidthSlider()
@@ -20,7 +20,11 @@ final class AnnotationToolbar: AttachedToolbar {
     private var preferredRedactionTool: AnnotationTool = .mosaic
     private var preferredRedactionStyle: AnnotationRedactionStyle = .mosaic
     private let familyPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let sizeField = NSTextField()
+    private let sizeCombo = FirstMouseComboBox()
+    private let sizeStepper = FirstMouseStepper()
+    private var isSyncing = false
+
+    private static let presetFontSizes: [Int] = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72, 96]
 
     private weak var canvas: AnnotationCanvasView?
     private weak var pin: ImagePinView?
@@ -85,7 +89,7 @@ final class AnnotationToolbar: AttachedToolbar {
             redactionModeControl,
             segments: [
                 (AnnotationTool.mosaic.symbol, "Mosaic", "Mosaic (M)"),
-                ("drop.fill", "Secure Blur", "Secure Blur"),
+                ("aqi.medium", "Secure Blur", "Secure Blur"),
                 (AnnotationTool.blur.symbol, "Solid Fill", "Solid Fill (B)")
             ],
             action: #selector(redactionModeChanged)
@@ -104,7 +108,7 @@ final class AnnotationToolbar: AttachedToolbar {
             highlightModeControl,
             segments: [
                 ("rectangle", "Rectangle", "Rectangle Highlight"),
-                ("scribble", "Freehand", "Freehand Highlight")
+                ("scribble.variable", "Freehand", "Freehand Highlight")
             ],
             action: #selector(highlightModeChanged)
         )
@@ -113,8 +117,8 @@ final class AnnotationToolbar: AttachedToolbar {
             textStyleControl,
             segments: [
                 ("textformat", "Plain Text", "Plain Text"),
-                ("rectangle.fill", "Boxed Text", "Boxed Text"),
-                ("rectangle", "Outlined Text", "Outlined Text")
+                ("a.square.fill", "Boxed Text", "Boxed Text"),
+                ("a.square", "Outlined Text", "Outlined Text")
             ],
             action: #selector(textStyleChanged)
         )
@@ -122,13 +126,10 @@ final class AnnotationToolbar: AttachedToolbar {
         colorSwatch.color = Preferences.shared.annotationColor
         colorSwatch.onColorChange = { [weak self] color in
             guard let self, let canvas = self.canvas else { return }
-            canvas.commitTextEditor()
-            if canvas.selectedAnnotation != nil {
-                canvas.updateSelectedStyle { $0.colorHex = color.hexString }
-            } else {
+            if canvas.selectedAnnotation == nil {
                 Preferences.shared.annotationColor = color
-                canvas.style.colorHex = color.hexString
             }
+            canvas.updateSelectedStyle { $0.colorHex = color.hexString }
         }
         properties.orientation = .horizontal
         properties.alignment = .centerY
@@ -156,20 +157,29 @@ final class AnnotationToolbar: AttachedToolbar {
         familyPopUp.widthAnchor.constraint(equalToConstant: 120).isActive = true
         fontControls.addArrangedSubview(familyPopUp)
 
-        sizeField.formatter = {
-            let formatter = NumberFormatter()
-            formatter.minimum = 6
-            formatter.maximum = 400
-            return formatter
-        }()
-        sizeField.target = self
-        sizeField.action = #selector(fontSizeChanged)
-        sizeField.controlSize = .small
-        sizeField.font = .systemFont(ofSize: 11)
-        sizeField.toolTip = "Text Size"
-        sizeField.translatesAutoresizingMaskIntoConstraints = false
-        sizeField.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        fontControls.addArrangedSubview(sizeField)
+        sizeCombo.addItems(withObjectValues: Self.presetFontSizes)
+        sizeCombo.isEditable = true
+        sizeCombo.completes = false
+        sizeCombo.delegate = self
+        sizeCombo.target = self
+        sizeCombo.action = #selector(fontSizeChanged)
+        sizeCombo.controlSize = .small
+        sizeCombo.font = .systemFont(ofSize: 11)
+        sizeCombo.toolTip = "Text Size"
+        sizeCombo.translatesAutoresizingMaskIntoConstraints = false
+        sizeCombo.widthAnchor.constraint(equalToConstant: 54).isActive = true
+        fontControls.addArrangedSubview(sizeCombo)
+
+        sizeStepper.minValue = 6
+        sizeStepper.maxValue = 400
+        sizeStepper.increment = 2
+        sizeStepper.valueWraps = false
+        sizeStepper.controlSize = .small
+        sizeStepper.target = self
+        sizeStepper.action = #selector(fontSizeStepped)
+        sizeStepper.toolTip = "Adjust Text Size"
+        sizeStepper.translatesAutoresizingMaskIntoConstraints = false
+        fontControls.addArrangedSubview(sizeStepper)
         fontControls.isHidden = true
         properties.addArrangedSubview(fontControls)
 
@@ -230,6 +240,9 @@ final class AnnotationToolbar: AttachedToolbar {
 
     func syncSelection() {
         guard let canvas else { return }
+        isSyncing = true
+        defer { isSyncing = false }
+
         if canvas.tool.isRedaction {
             preferredRedactionTool = canvas.tool
             if let explicit = canvas.style.redactionStyle {
@@ -243,9 +256,9 @@ final class AnnotationToolbar: AttachedToolbar {
             button.contentTintColor = active ? .controlAccentColor : .labelColor
         }
 
-        // Controls mirror the selected annotation's own style; falling back
+        // Controls mirror the active/selected annotation's own style; falling back
         // to the pin's current style when nothing is selected.
-        let selected = canvas.selectedAnnotation
+        let selected = canvas.activeAnnotation
         let selectedText = selected?.tool == .text ? selected : nil
         let effectiveStyle = selected?.style ?? canvas.style
         colorSwatch.setColorSilently(effectiveStyle.color)
@@ -316,7 +329,11 @@ final class AnnotationToolbar: AttachedToolbar {
         let family = effectiveStyle.fontName ?? TextDefaults.font.familyName ?? "Helvetica"
         familyPopUp.selectItem(withTitle: family)
         if familyPopUp.selectedItem == nil { familyPopUp.setTitle(family) }
-        sizeField.stringValue = String(Int(effectiveStyle.fontSize))
+        let fontSize = effectiveStyle.fontSize
+        sizeCombo.stringValue = fontSize == fontSize.rounded()
+            ? String(Int(fontSize))
+            : String(format: "%.1f", fontSize)
+        sizeStepper.doubleValue = Double(fontSize)
         undoButton.isEnabled = canvas.store.undoManager.canUndo
         redoButton.isEnabled = canvas.store.undoManager.canRedo
         deleteButton.isEnabled = canvas.selectedAnnotation != nil
@@ -400,17 +417,44 @@ final class AnnotationToolbar: AttachedToolbar {
     }
 
     @objc private func fontFamilyChanged() {
-        guard let family = familyPopUp.titleOfSelectedItem else { return }
-        canvas?.updateSelectedStyle { $0.fontName = family }
+        guard !isSyncing, let family = familyPopUp.titleOfSelectedItem, let canvas else { return }
+        canvas.updateSelectedStyle { $0.fontName = family }
+        syncSelection()
+        canvas.restoreKeyboardFocus()
+    }
+
+    private func applyFontSize(_ value: CGFloat) {
+        guard let canvas, value >= 6, value <= 400 else { return syncSelection() }
+        if canvas.selectedAnnotation == nil {
+            Preferences.shared.annotationFontSize = Double(value)
+        }
+        canvas.updateSelectedStyle { $0.fontSize = value }
+        syncSelection()
+        canvas.restoreKeyboardFocus()
     }
 
     @objc private func fontSizeChanged() {
-        guard let canvas else { return }
-        let value = CGFloat(sizeField.doubleValue)
-        guard value >= 6, value <= 400 else { return syncSelection() }
-        canvas.commitTextEditor()
-        if canvas.selectedAnnotation == nil { Preferences.shared.annotationFontSize = Double(value) }
-        canvas.updateSelectedStyle { $0.fontSize = value }
+        guard !isSyncing else { return }
+        let raw = sizeCombo.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsed = Double(raw) ?? sizeCombo.doubleValue
+        applyFontSize(CGFloat(parsed))
+    }
+
+    @objc private func fontSizeStepped() {
+        guard !isSyncing else { return }
+        applyFontSize(CGFloat(sizeStepper.doubleValue.rounded()))
+    }
+
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        guard !isSyncing else { return }
+        if let selectedObject = sizeCombo.objectValueOfSelectedItem,
+           let number = selectedObject as? NSNumber {
+            applyFontSize(CGFloat(number.doubleValue))
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.fontSizeChanged()
+        }
     }
 
     @objc private func undo() { canvas?.commitTextEditor(); canvas?.store.undoManager.undo(); syncSelection() }
@@ -439,5 +483,13 @@ private final class AnnotationWidthSlider: NSSlider {
 }
 
 private final class FirstMouseSegmentedControl: NSSegmentedControl {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+private final class FirstMouseComboBox: NSComboBox {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+private final class FirstMouseStepper: NSStepper {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

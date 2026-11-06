@@ -22,13 +22,13 @@ enum AnnotationTool: String, Codable, CaseIterable {
         case .ellipse: return "oval"
         case .arrow: return "arrow.up.right"
         case .line: return "line.diagonal"
-        case .freehand: return "scribble"
+        case .freehand: return "scribble.variable"
         case .text: return "textformat"
-        case .counter: return "number.circle"
+        case .counter: return "1.circle"
         case .highlight: return "highlighter"
         case .blur: return "rectangle.fill"
-        case .mosaic: return "squareshape.split.3x3"
-        case .spotlight: return "light.max"
+        case .mosaic: return "checkerboard.rectangle"
+        case .spotlight: return "flashlight.on.fill"
         case .crop: return "crop"
         }
     }
