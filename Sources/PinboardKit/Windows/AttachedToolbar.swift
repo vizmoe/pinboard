@@ -1,5 +1,10 @@
 import AppKit
 
+final class ToolbarPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 /// Compact control strip in a child panel pinned to a pin window.
 ///
 /// Child windows follow their parent when it moves, so the strip never covers
@@ -10,7 +15,7 @@ class AttachedToolbar: NSObject {
     let stack = NSStackView()
 
     override init() {
-        panel = NSPanel(
+        panel = ToolbarPanel(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 32),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,

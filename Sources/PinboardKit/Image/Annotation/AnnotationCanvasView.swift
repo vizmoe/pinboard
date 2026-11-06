@@ -5,7 +5,7 @@ import AppKit
 /// All geometry is kept in image pixel coordinates; the view only applies a
 /// scale transform, so annotations follow the window at any size (including
 /// non-proportional resizing) and export at full resolution.
-final class AnnotationCanvasView: NSView {
+final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     weak var imagePin: ImagePinView?
     let store: AnnotationStore
     let imageSize: CGSize
@@ -14,7 +14,7 @@ final class AnnotationCanvasView: NSView {
     var tool: AnnotationTool = .select {
         willSet { if newValue != tool { commitTextEditor() } }
         didSet {
-            if tool != .select { selectedID = nil }
+            if tool != .select, selectedAnnotation?.tool != tool { selectedID = nil }
             if tool != .crop { cropDraft = nil }
             needsDisplay = true
             onSelectionChange?()
@@ -149,6 +149,8 @@ final class AnnotationCanvasView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard isActive, let window else { return }
+        let committedActiveText = textEditor?.stringValue
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         commitTextEditor()
         window.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
@@ -175,9 +177,25 @@ final class AnnotationCanvasView: NSView {
         case .crop:
             runCropLoop(from: point)
         case .text:
-            beginTextEditing(at: imagePoint(from: point))
+            if let hit = topmostAnnotation(at: imagePoint(from: point)), hit.tool == .text {
+                selectedID = hit.id
+                needsDisplay = true
+                if event.clickCount >= 2 {
+                    beginTextEditing(for: hit)
+                } else {
+                    runMoveLoop(for: hit, from: point)
+                }
+            } else if !committedActiveText {
+                beginTextEditing(at: imagePoint(from: point))
+            }
         case .counter:
-            addCounter(at: imagePoint(from: point))
+            if let hit = topmostAnnotation(at: imagePoint(from: point)), hit.tool == .counter {
+                selectedID = hit.id
+                needsDisplay = true
+                runMoveLoop(for: hit, from: point)
+            } else {
+                addCounter(at: imagePoint(from: point))
+            }
         default:
             runDrawingLoop(from: point)
         }
@@ -436,22 +454,58 @@ final class AnnotationCanvasView: NSView {
         selectedID.flatMap { store.annotation(with: $0) }
     }
 
+    /// The annotation currently being edited in the live text field, or the
+    /// selected committed annotation on the canvas.
+    var activeAnnotation: Annotation? {
+        editingAnnotation ?? selectedAnnotation
+    }
+
+    var isEditingText: Bool {
+        textEditor != nil && editingAnnotation != nil
+    }
+
     /// Programmatic selection (the toolbar and tests use this; nil clears).
     func selectAnnotation(id: UUID?) {
         selectedID = id
         needsDisplay = true
     }
 
-    /// Style edit scoped correctly: with a selection it changes only that
-    /// annotation (undoable via the store); without one it becomes the style
-    /// new annotations get on this pin. Never touches a global default.
+    /// Style edit scoped correctly: when the on-canvas text editor is active,
+    /// updates that live text annotation in place; when a committed annotation
+    /// is selected, updates only that annotation (undoable via the store);
+    /// otherwise updates the style new annotations receive on this pin.
     func updateSelectedStyle(_ mutate: (inout AnnotationStyle) -> Void) {
-        commitTextEditor()
+        if var editing = editingAnnotation {
+            editing.text = textEditor?.stringValue ?? editing.text
+            mutate(&editing.style)
+            editingAnnotation = editing
+            refreshTextEditorAppearance()
+            if store.annotation(with: editing.id) != nil {
+                store.update(editing, actionName: "Style Annotation")
+            } else {
+                mutate(&style)
+            }
+            needsDisplay = true
+            onSelectionChange?()
+            return
+        }
         if let selectedID, var annotation = store.annotation(with: selectedID) {
             mutate(&annotation.style)
             store.update(annotation, actionName: "Style Annotation")
         } else {
             mutate(&style)
+        }
+    }
+
+    func restoreKeyboardFocus() {
+        guard let window else { return }
+        if imagePin?.annotationToolbar?.panel.isKeyWindow == true {
+            window.makeKey()
+        }
+        if let textEditor {
+            window.makeFirstResponder(textEditor)
+        } else {
+            window.makeFirstResponder(self)
         }
     }
 
@@ -472,12 +526,12 @@ final class AnnotationCanvasView: NSView {
         return annotations
     }
 
-    private func beginTextEditing(at imageOrigin: CGPoint) {
+    func beginTextEditing(at imageOrigin: CGPoint) {
         let annotation = Annotation(tool: .text, points: [imageOrigin], style: style, text: "")
         presentTextEditor(for: annotation, isNew: true)
     }
 
-    private func beginTextEditing(for annotation: Annotation) {
+    func beginTextEditing(for annotation: Annotation) {
         suppressedID = annotation.id
         needsDisplay = true
         presentTextEditor(for: annotation, isNew: false)
@@ -485,25 +539,47 @@ final class AnnotationCanvasView: NSView {
 
     private func presentTextEditor(for annotation: Annotation, isNew: Bool) {
         commitTextEditor()
+        if isNew {
+            selectedID = nil
+        } else {
+            selectedID = annotation.id
+        }
         editingAnnotation = annotation
-        let origin = viewPoint(from: annotation.points.first ?? .zero)
-        let fontSize = max(annotation.style.fontSize * scaleY, 6)
 
-        let field = NSTextField(frame: NSRect(x: origin.x - 4, y: origin.y - fontSize * 1.5, width: 160, height: fontSize * 1.5))
+        let field = NSTextField(frame: .zero)
         field.stringValue = annotation.text ?? ""
-        field.font = annotation.style.font(pointSize: fontSize)
-        field.textColor = annotation.style.color
         field.isBordered = false
         field.drawsBackground = true
         field.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.85)
         field.focusRingType = .none
+        field.delegate = self
         field.target = self
         field.action = #selector(textEditorCommitted)
         addSubview(field)
         textEditor = field
+        refreshTextEditorAppearance()
         imagePin?.pinController?.requestKeyboardFocus()
         window?.makeFirstResponder(field)
-        if !isNew { selectedID = annotation.id }
+        onSelectionChange?()
+    }
+
+    private func refreshTextEditorAppearance() {
+        guard let field = textEditor, var annotation = editingAnnotation else { return }
+        annotation.text = field.stringValue
+        editingAnnotation = annotation
+        let origin = viewPoint(from: annotation.points.first ?? .zero)
+        let fontSize = max(annotation.style.fontSize * scaleY, 6)
+        let font = annotation.style.font(pointSize: fontSize)
+        field.font = font
+        field.textColor = annotation.style.color
+        let measured = (field.stringValue as NSString).size(withAttributes: [.font: font])
+        let width = max(ceil(measured.width) + 28, 160)
+        let height = max(ceil(measured.height) + 8, fontSize * 1.5, 22)
+        field.frame = NSRect(x: origin.x - 4, y: origin.y - height, width: width, height: height)
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        refreshTextEditorAppearance()
     }
 
     @objc private func textEditorCommitted() {
@@ -524,12 +600,14 @@ final class AnnotationCanvasView: NSView {
             if existed { store.remove(id: annotation.id) }
         } else if existed {
             store.update(annotation, actionName: "Edit Text")
+            selectedID = annotation.id
         } else {
             store.add(annotation)
             selectedID = annotation.id
         }
         window?.makeFirstResponder(self)
         needsDisplay = true
+        onSelectionChange?()
     }
 
     // MARK: - Cursor
@@ -541,6 +619,9 @@ final class AnnotationCanvasView: NSView {
         case .select:
             return topmostAnnotation(at: imagePoint(from: point)) != nil ? .openHand : .arrow
         case .text:
+            if let hit = topmostAnnotation(at: imagePoint(from: point)), hit.tool == .text {
+                return .openHand
+            }
             return .iBeam
         default:
             return .crosshair

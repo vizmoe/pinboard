@@ -69,13 +69,95 @@ final class AnnotationToolbarTests: XCTestCase {
         let (view, canvas, _) = try makeEditor()
         canvas.tool = .text
         let toolbar = try XCTUnwrap(view.annotationToolbar)
+        XCTAssertTrue(toolbar.panel.canBecomeKey, "Toolbar panel must allow key focus when an editable field is clicked")
+        XCTAssertTrue(toolbar.panel.becomesKeyOnlyIfNeeded)
         let properties = try XCTUnwrap(toolbar.stack.arrangedSubviews.last as? NSStackView)
         let fontControls = try XCTUnwrap(properties.arrangedSubviews.compactMap { $0 as? NSStackView }.first)
-        let sizeField = try XCTUnwrap(fontControls.arrangedSubviews.compactMap { $0 as? NSTextField }.first)
-        sizeField.doubleValue = 32
-        XCTAssertTrue(sizeField.sendAction(sizeField.action, to: sizeField.target))
+        let sizeCombo = try XCTUnwrap(fontControls.arrangedSubviews.compactMap { $0 as? NSComboBox }.first)
+        let sizeStepper = try XCTUnwrap(fontControls.arrangedSubviews.compactMap { $0 as? NSStepper }.first)
+
+        sizeCombo.stringValue = "32"
+        XCTAssertTrue(sizeCombo.sendAction(sizeCombo.action, to: sizeCombo.target))
         XCTAssertEqual(canvas.style.fontSize, 32)
         XCTAssertEqual(Preferences.shared.annotationFontSize, 32)
+        XCTAssertEqual(sizeStepper.doubleValue, 32)
+
+        sizeStepper.doubleValue = 36
+        XCTAssertTrue(sizeStepper.sendAction(sizeStepper.action, to: sizeStepper.target))
+        XCTAssertEqual(canvas.style.fontSize, 36)
+        XCTAssertEqual(Preferences.shared.annotationFontSize, 36)
+        XCTAssertEqual(sizeCombo.stringValue, "36")
+    }
+
+    func testFontSizeAdjustsLiveTextEditorAndCommittedTextAnnotation() throws {
+        let preference = Preferences.shared.annotationFontSize
+        defer { Preferences.shared.annotationFontSize = preference }
+        let (view, canvas, _) = try makeEditor()
+        let toolbar = try XCTUnwrap(view.annotationToolbar)
+        let properties = try XCTUnwrap(toolbar.stack.arrangedSubviews.last as? NSStackView)
+        let fontControls = try XCTUnwrap(properties.arrangedSubviews.compactMap { $0 as? NSStackView }.first)
+        let sizeCombo = try XCTUnwrap(fontControls.arrangedSubviews.compactMap { $0 as? NSComboBox }.first)
+        let sizeStepper = try XCTUnwrap(fontControls.arrangedSubviews.compactMap { $0 as? NSStepper }.first)
+
+        // 1. Start typing a new text annotation on the canvas and adjust font size while the editor is live.
+        canvas.tool = .text
+        canvas.beginTextEditing(at: CGPoint(x: 40, y: 60))
+        let liveField = try XCTUnwrap(canvas.subviews.compactMap { $0 as? NSTextField }.first)
+        liveField.stringValue = "Live Text"
+
+        sizeCombo.stringValue = "42"
+        XCTAssertTrue(sizeCombo.sendAction(sizeCombo.action, to: sizeCombo.target))
+        XCTAssertTrue(canvas.isEditingText, "Changing font size must keep the live text editor open")
+        XCTAssertEqual(canvas.activeAnnotation?.style.fontSize, 42)
+
+        canvas.commitTextEditor()
+        let created = try XCTUnwrap(view.annotationStore.annotations.first)
+        XCTAssertEqual(created.text, "Live Text")
+        XCTAssertEqual(created.style.fontSize, 42)
+        XCTAssertEqual(canvas.selectedAnnotation?.id, created.id, "Committed text annotation remains selected")
+
+        // 2. Adjust the font size of the already-entered (committed) text annotation via stepper and combo box.
+        sizeStepper.doubleValue = 54
+        XCTAssertTrue(sizeStepper.sendAction(sizeStepper.action, to: sizeStepper.target))
+        XCTAssertEqual(view.annotationStore.annotation(with: created.id)?.style.fontSize, 54)
+        XCTAssertEqual(sizeCombo.stringValue, "54")
+
+        // 3. Re-open the existing text annotation in the live editor and adjust its font size again.
+        canvas.beginTextEditing(for: try XCTUnwrap(view.annotationStore.annotation(with: created.id)))
+        sizeCombo.stringValue = "28"
+        XCTAssertTrue(sizeCombo.sendAction(sizeCombo.action, to: sizeCombo.target))
+        canvas.commitTextEditor()
+        XCTAssertEqual(view.annotationStore.annotation(with: created.id)?.style.fontSize, 28)
+
+        // 4. Clicking an existing text annotation while the Text tool is still active selects it instead of spawning a blank editor.
+        canvas.selectAnnotation(id: nil)
+        let clickPoint = canvas.convert(canvas.viewPoint(from: CGPoint(x: 50, y: 50)), to: nil)
+        let windowNumber = try XCTUnwrap(view.window?.windowNumber)
+        let down = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: clickPoint, modifierFlags: [], timestamp: 0,
+            windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        let up = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: clickPoint, modifierFlags: [], timestamp: 0,
+            windowNumber: windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        NSApp.postEvent(up, atStart: false)
+        canvas.mouseDown(with: down)
+        XCTAssertFalse(canvas.isEditingText, "Single-clicking an existing text annotation with the Text tool selects it without opening a blank editor")
+        XCTAssertEqual(canvas.selectedAnnotation?.id, created.id)
+    }
+
+    func testAnnotationToolSymbolsUseRefinedIcons() {
+        XCTAssertEqual(AnnotationTool.mosaic.symbol, "checkerboard.rectangle")
+        XCTAssertEqual(AnnotationTool.counter.symbol, "1.circle")
+        XCTAssertEqual(AnnotationTool.spotlight.symbol, "flashlight.on.fill")
+        XCTAssertEqual(AnnotationTool.freehand.symbol, "scribble.variable")
+        for tool in AnnotationTool.allCases {
+            XCTAssertNotNil(
+                NSImage(systemSymbolName: tool.symbol, accessibilityDescription: tool.localizedName),
+                "\(tool.rawValue) symbol \(tool.symbol) must exist in SF Symbols"
+            )
+        }
     }
 
     func testRedactionToolsAreMergedInMainStripWithModeSwitcherInProperties() throws {
