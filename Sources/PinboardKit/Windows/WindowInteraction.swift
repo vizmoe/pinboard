@@ -45,10 +45,39 @@ extension NSScreen {
     }
 }
 
+private typealias CGSConnectionID = UInt32
+@_silgen_name("CGSMainConnectionID") private func CGSMainConnectionID() -> CGSConnectionID
+@_silgen_name("CGSSetConnectionProperty") private func CGSSetConnectionProperty(
+    _ cid: CGSConnectionID,
+    _ targetCid: CGSConnectionID,
+    _ key: CFString,
+    _ value: CFTypeRef
+) -> Int32
+
 /// Mouse tracking loops used by the borderless pin windows. Both helpers run a
 /// local event loop and return once the mouse is released.
 enum WindowInteraction {
     static let clickSlop: CGFloat = 3
+
+    private static let backgroundCursorAllowanceInstalled: Bool = {
+        let cid = CGSMainConnectionID()
+        _ = CGSSetConnectionProperty(cid, cid, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+        return true
+    }()
+
+    /// Applies `cursor` even while Pinboard is an inactive menu-bar app hosting
+    /// non-activating pin panels, and bypasses AppKit's `NSCursor.current`
+    /// short-circuit when WindowServer reset the hardware cursor externally.
+    static func applyCursor(_ cursor: NSCursor) {
+        _ = backgroundCursorAllowanceInstalled
+        if NSCursor.current === cursor,
+           let system = NSCursor.currentSystem,
+           system.image.size != cursor.image.size || system.hotSpot != cursor.hotSpot {
+            let fallback: NSCursor = cursor === NSCursor.arrow ? .openHand : .arrow
+            fallback.set()
+        }
+        cursor.set()
+    }
 
     /// Drags the window. If the pointer never moves past `clickSlop` the
     /// gesture is treated as a plain click and `onClick` is invoked instead.
@@ -69,11 +98,11 @@ enum WindowInteraction {
             let dy = current.y - startMouse.y
             if !didDrag && hypot(dx, dy) < clickSlop { continue }
             didDrag = true
-            dragCursor?.set()
+            if let dragCursor { applyCursor(dragCursor) }
             window.setFrameOrigin(CGPoint(x: (startOrigin.x + dx).rounded(), y: (startOrigin.y + dy).rounded()))
         }
 
-        endCursor?.set()
+        if let endCursor { applyCursor(endCursor) }
         if !didDrag { onClick?() }
     }
 
@@ -87,12 +116,12 @@ enum WindowInteraction {
         }()
 
         let cursor = edge.cursor
-        cursor.set()
+        applyCursor(cursor)
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             if event.type == .leftMouseUp { break }
             // Re-assert on every step: AppKit resets the cursor while the
             // window geometry changes, which otherwise looks like flicker.
-            cursor.set()
+            applyCursor(cursor)
             let current = NSEvent.mouseLocation
             let dx = current.x - startMouse.x
             let dy = current.y - startMouse.y
@@ -123,6 +152,7 @@ enum WindowInteraction {
             if edge.contains(.left) { frame.origin.x = startFrame.maxX - frame.width }
             if edge.contains(.bottom) { frame.origin.y = startFrame.maxY - frame.height }
             window.setFrame(frame, display: true)
+            applyCursor(cursor)
         }
         window.invalidateShadow()
     }

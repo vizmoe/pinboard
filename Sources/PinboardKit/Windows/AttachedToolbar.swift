@@ -38,7 +38,8 @@ class AttachedToolbar: NSObject {
         background.blendingMode = .behindWindow
         background.state = .active
         background.wantsLayer = true
-        background.layer?.cornerRadius = 9
+        background.layer?.cornerRadius = 8
+        background.layer?.cornerCurve = .continuous
         background.layer?.masksToBounds = true
 
         stack.orientation = .horizontal

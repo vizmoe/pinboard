@@ -2,22 +2,118 @@ import AppKit
 
 /// Owns one floating pin: its panel, root view and content view.
 final class PinWindowController: NSObject, NSWindowDelegate {
+    /// Explicit window lifecycle state; prevents closed pins from being
+    /// accidentally re-shown or resized as ghost panels.
+    enum LifecycleState: Equatable {
+        case visible
+        case hidden
+        case closed
+    }
+
+    /// Explicit association between a live pin and its `HistoryStore` record.
+    enum HistoryState: Equatable {
+        /// Never registered in a store yet (eligible for adoption if a store is installed later).
+        case unregistered
+        /// Linked to `id` in `HistoryStore`; `isDirty` tracks unsaved edits awaiting a write.
+        case tracked(id: UUID, isDirty: Bool)
+        /// Record was explicitly deleted by the user while the pin stayed open; never re-adopted.
+        case detached
+    }
+
+    /// Whether the pin's background follows the mode/theme default or an explicit user toggle.
+    enum BackgroundPolicy: Equatable {
+        case automatic
+        case explicit(visible: Bool)
+    }
+
+    /// Floating-point state for continuous trackpad pinch/scroll zoom gestures.
+    private struct ZoomGestureSession {
+        var currentSize: CGSize = .zero
+        var anchorCenter: CGPoint = .zero
+        var lastTimestamp: TimeInterval = 0
+        var shadowInvalidateWorkItem: DispatchWorkItem?
+
+        mutating func sync(to frame: NSRect) {
+            currentSize = frame.size
+            anchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        }
+
+        mutating func scheduleShadowInvalidation(for panel: NSPanel) {
+            shadowInvalidateWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak panel] in
+                panel?.invalidateShadow()
+            }
+            shadowInvalidateWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        }
+
+        mutating func flushShadowInvalidation(for panel: NSPanel) {
+            shadowInvalidateWorkItem?.cancel()
+            shadowInvalidateWorkItem = nil
+            panel.invalidateShadow()
+        }
+
+        mutating func cancelShadowInvalidation() {
+            shadowInvalidateWorkItem?.cancel()
+            shadowInvalidateWorkItem = nil
+        }
+    }
+
     let id: UUID
     let kind: PinKind
     let panel: PinPanel
     let rootView = PinRootView()
     let contentView: PinContentDisplaying
 
-    private(set) var isPinHidden = false
+    private(set) var lifecycleState: LifecycleState = .visible
+    var isPinHidden: Bool { lifecycleState == .hidden }
     weak var manager: PinWindowManager?
+
+    private(set) var historyState: HistoryState = .unregistered
 
     /// Links this pin to its history record. Edits update that record in
     /// place — they never spawn new entries.
-    var historyRecordID: UUID?
+    var historyRecordID: UUID? {
+        get {
+            if case .tracked(let id, _) = historyState { return id }
+            return nil
+        }
+        set {
+            if let id = newValue {
+                let dirty: Bool
+                if case .tracked(_, let isDirty) = historyState { dirty = isDirty } else { dirty = false }
+                historyState = .tracked(id: id, isDirty: dirty)
+            } else if historyState != .detached {
+                historyState = .unregistered
+            }
+        }
+    }
 
     /// True once the user deleted this pin's history. It is never registered
     /// again, even if a store is installed later.
-    var historyWasDeleted = false
+    var historyWasDeleted: Bool {
+        get { historyState == .detached }
+        set {
+            if newValue {
+                historyState = .detached
+            } else if historyState == .detached {
+                historyState = .unregistered
+            }
+        }
+    }
+
+    func markHistoryTracked(id: UUID, isDirty: Bool = true) {
+        historyState = .tracked(id: id, isDirty: isDirty)
+    }
+
+    func markHistoryDirty(_ isDirty: Bool) {
+        guard case .tracked(let id, _) = historyState else { return }
+        historyState = .tracked(id: id, isDirty: isDirty)
+    }
+
+    func detachHistory() {
+        historyState = .detached
+    }
 
     /// Per-window opacity (1 = fully opaque). Lives on the pin, not in
     /// preferences — each window manages its own.
@@ -29,12 +125,13 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// content's natural ratio. Can be switched on per pin from the menu.
     var isAspectLocked = false
 
+    /// Only image pins have a zoom percentage concept; text pins simply resize
+    /// their frame and re-wrap text.
+    var supportsZoom: Bool { kind == .image }
+
     /// Reference 100% size for the zoom badge and reset-zoom action.
     private(set) var baseSize: CGSize = .zero
-    private var zoomCurrentSize: CGSize = .zero
-    private var zoomAnchorCenter: CGPoint = .zero
-    private var lastZoomTimestamp: TimeInterval = 0
-    private var shadowInvalidateWorkItem: DispatchWorkItem?
+    private var zoomSession = ZoomGestureSession()
 
     init(content: PinContent, id: UUID = UUID(), annotations: AnnotationStore.Payload? = nil, textMode: TextContentMode? = nil) {
         self.id = id
@@ -54,10 +151,8 @@ final class PinWindowController: NSObject, NSWindowDelegate {
 
         contentView.pinController = self
         rootView.pinController = self
-        // Text pins are fully transparent: only the glyphs are on screen.
-        // `applyPreferences` at the end of init paints the Markdown theme's
-        // paper instead, when the theme has one.
-        rootView.usesHoverBackground = kind == .text
+        rootView.supportsZoom = supportsZoom
+        rootView.usesHoverBackground = false
         rootView.cornerRadius = 12
         rootView.closeChrome.onAction = { [weak self] in self?.closePin() }
         rootView.hideChrome.onAction = { [weak self] in self?.hidePin() }
@@ -94,19 +189,17 @@ final class PinWindowController: NSObject, NSWindowDelegate {
 
     func setFrame(_ frame: NSRect) {
         baseSize = frame.size
-        zoomCurrentSize = frame.size
-        zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        zoomSession.sync(to: frame)
         panel.setFrame(frame, display: true)
         panel.invalidateShadow()
-        rootView.zoomBadge.setPercentage(zoomPercentage)
+        rootView.updateZoomPercentage(zoomPercentage)
     }
 
     func syncBaseSizeToCurrentFrame() {
         let frame = panel.frame
         baseSize = frame.size
-        zoomCurrentSize = frame.size
-        zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
-        rootView.zoomBadge.setPercentage(100)
+        zoomSession.sync(to: frame)
+        rootView.updateZoomPercentage(100)
     }
 
     /// Grows the window so content that arrived after creation (an image
@@ -114,7 +207,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// the top-left corner anchored and stays inside the screen, mirroring
     /// `idealFrame`.
     func growToFitContent() {
-        guard !rootView.isEditingContent else { return }
+        guard lifecycleState != .closed, !rootView.isEditingContent else { return }
         let visible = (panel.screen ?? NSScreen.main)?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let maxSize = CGSize(width: visible.width * 0.8, height: visible.height * 0.8)
@@ -137,23 +230,23 @@ final class PinWindowController: NSObject, NSWindowDelegate {
             minSize: contentView.minimumPinSize,
             aspectRatio: isAspectLocked ? contentView.contentAspectRatio : nil
         )
-        zoomCurrentSize = panel.frame.size
-        zoomAnchorCenter = CGPoint(x: panel.frame.midX, y: panel.frame.midY)
-        rootView.zoomBadge.setPercentage(zoomPercentage)
+        zoomSession.sync(to: panel.frame)
+        rootView.updateZoomPercentage(zoomPercentage, animated: true)
+        rootView.refreshCursorAtCurrentMouseLocation()
     }
 
     var zoomPercentage: Int {
         let referenceWidth = baseSize.width > 1 ? baseSize.width : panel.frame.width
-        let currentWidth = zoomCurrentSize.width > 1 ? zoomCurrentSize.width : panel.frame.width
+        let currentWidth = zoomSession.currentSize.width > 1 ? zoomSession.currentSize.width : panel.frame.width
         guard referenceWidth > 1 else { return 100 }
         return max(1, Int(((currentWidth / referenceWidth) * 100).rounded()))
     }
 
     func resetZoom() {
-        guard baseSize.width > 1, baseSize.height > 1 else { return }
+        guard supportsZoom, baseSize.width > 1, baseSize.height > 1 else { return }
         let frame = panel.frame
-        zoomCurrentSize = baseSize
-        zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        zoomSession.currentSize = baseSize
+        zoomSession.anchorCenter = CGPoint(x: frame.midX, y: frame.midY)
         let origin = CGPoint(
             x: (frame.midX - baseSize.width / 2).rounded(),
             y: (frame.midY - baseSize.height / 2).rounded()
@@ -164,25 +257,23 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     }
 
     func handleMagnify(with event: NSEvent) {
+        guard supportsZoom else { return }
         if event.phase == .began {
-            let frame = panel.frame
-            zoomCurrentSize = frame.size
-            zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+            zoomSession.sync(to: panel.frame)
         }
         if event.magnification != 0 {
             zoom(by: 1 + event.magnification, isContinuousGesture: true)
         }
         if event.phase == .ended || event.phase == .cancelled {
-            flushShadowInvalidation()
+            zoomSession.flushShadowInvalidation(for: panel)
         }
     }
 
     func handleScrollWheel(with event: NSEvent) {
+        guard supportsZoom else { return }
         guard !rootView.isEditingContent || event.modifierFlags.contains(.command) else { return }
         if event.phase == .began {
-            let frame = panel.frame
-            zoomCurrentSize = frame.size
-            zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+            zoomSession.sync(to: panel.frame)
         }
         let rawDelta: CGFloat
         if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
@@ -196,7 +287,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         let isContinuous = event.phase != [] || event.momentumPhase != []
         zoom(by: factor, isContinuousGesture: isContinuous)
         if event.phase == .ended || event.momentumPhase == .ended {
-            flushShadowInvalidation()
+            zoomSession.flushShadowInvalidation(for: panel)
         }
     }
 
@@ -204,86 +295,72 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// two-finger swipe gestures. Keeps unrounded floating-point state across
     /// continuous steps so the centre and aspect ratio never drift.
     func zoom(by factor: CGFloat, isContinuousGesture: Bool = false) {
-        guard factor > 0 else { return }
+        guard supportsZoom, factor > 0 else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let frame = panel.frame
         if baseSize.width <= 0 || baseSize.height <= 0 {
             baseSize = frame.size
         }
-        if now - lastZoomTimestamp > 0.25 || zoomCurrentSize.width <= 0 || zoomCurrentSize.height <= 0 {
-            zoomCurrentSize = frame.size
-            zoomAnchorCenter = CGPoint(x: frame.midX, y: frame.midY)
+        if now - zoomSession.lastTimestamp > 0.25 || zoomSession.currentSize.width <= 0 || zoomSession.currentSize.height <= 0 {
+            zoomSession.sync(to: frame)
         }
-        lastZoomTimestamp = now
+        zoomSession.lastTimestamp = now
 
         let minSize = contentView.minimumPinSize
         let visible = (panel.screen ?? NSScreen.underMouse)?.visibleFrame.size ?? CGSize(width: 4000, height: 3000)
-        let lower = max(minSize.width / zoomCurrentSize.width, minSize.height / zoomCurrentSize.height)
-        let upper = max(lower, min(visible.width / zoomCurrentSize.width, visible.height / zoomCurrentSize.height))
+        let lower = max(minSize.width / zoomSession.currentSize.width, minSize.height / zoomSession.currentSize.height)
+        let upper = max(lower, min(visible.width / zoomSession.currentSize.width, visible.height / zoomSession.currentSize.height))
         let clamped = min(max(factor, lower), upper)
         guard abs(clamped - 1) > 0.0001 else { return }
 
-        zoomCurrentSize = CGSize(
-            width: zoomCurrentSize.width * clamped,
-            height: zoomCurrentSize.height * clamped
+        zoomSession.currentSize = CGSize(
+            width: zoomSession.currentSize.width * clamped,
+            height: zoomSession.currentSize.height * clamped
         )
         let size = isContinuousGesture
-            ? zoomCurrentSize
-            : CGSize(width: zoomCurrentSize.width.rounded(), height: zoomCurrentSize.height.rounded())
+            ? zoomSession.currentSize
+            : CGSize(width: zoomSession.currentSize.width.rounded(), height: zoomSession.currentSize.height.rounded())
         let origin = isContinuousGesture
-            ? CGPoint(x: zoomAnchorCenter.x - size.width / 2, y: zoomAnchorCenter.y - size.height / 2)
-            : CGPoint(x: (zoomAnchorCenter.x - size.width / 2).rounded(), y: (zoomAnchorCenter.y - size.height / 2).rounded())
+            ? CGPoint(x: zoomSession.anchorCenter.x - size.width / 2, y: zoomSession.anchorCenter.y - size.height / 2)
+            : CGPoint(x: (zoomSession.anchorCenter.x - size.width / 2).rounded(), y: (zoomSession.anchorCenter.y - size.height / 2).rounded())
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         rootView.showZoomFeedback(percent: zoomPercentage)
 
         if isContinuousGesture {
-            scheduleShadowInvalidation()
+            zoomSession.scheduleShadowInvalidation(for: panel)
         } else {
-            flushShadowInvalidation()
+            zoomSession.flushShadowInvalidation(for: panel)
         }
-    }
-
-    private func scheduleShadowInvalidation() {
-        shadowInvalidateWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.panel.invalidateShadow()
-        }
-        shadowInvalidateWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
-    }
-
-    private func flushShadowInvalidation() {
-        shadowInvalidateWorkItem?.cancel()
-        shadowInvalidateWorkItem = nil
-        panel.invalidateShadow()
     }
 
     // MARK: - Visibility
 
     func present() {
-        let wasHidden = isPinHidden
-        isPinHidden = false
+        guard lifecycleState != .closed else { return }
+        let wasHidden = lifecycleState == .hidden
+        lifecycleState = .visible
         panel.orderFrontRegardless()
         panel.invalidateShadow()
         if wasHidden { manager?.notifyChange() }
     }
 
     func showPin() {
-        guard isPinHidden else { return }
-        isPinHidden = false
+        guard lifecycleState == .hidden else { return }
+        lifecycleState = .visible
         panel.orderFrontRegardless()
         manager?.notifyChange()
     }
 
     func hidePin() {
-        guard !isPinHidden else { return }
+        guard lifecycleState == .visible else { return }
         endEditing()
-        isPinHidden = true
+        rootView.resetPointerState()
+        lifecycleState = .hidden
         panel.orderOut(nil)
         manager?.notifyChange()
     }
 
-    var isPinVisible: Bool { !isPinHidden && panel.isVisible }
+    var isPinVisible: Bool { lifecycleState == .visible && panel.isVisible }
 
     /// Copy must succeed before the pin disappears, including pending edits.
     @discardableResult
@@ -298,7 +375,11 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     }
 
     func closePin() {
+        guard lifecycleState != .closed else { return }
         endEditing()
+        rootView.resetPointerState()
+        zoomSession.cancelShadowInvalidation()
+        lifecycleState = .closed
         panel.delegate = nil
         panel.orderOut(nil)
         panel.contentView = nil
@@ -335,12 +416,16 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     // MARK: - Chrome & menus
 
     func refreshChrome() {
-        var items = contentView.chromeItems()
-        items.append(ChromeItem(symbol: "doc.on.doc", tooltip: "Copy") { [weak self] in
-            self?.contentView.copyToPasteboard()
-        })
+        rootView.setEditChromeItem(contentView.editChromeItem())
+        rootView.setSaveChromeItem(contentView.saveChromeItem())
+        var items = [
+            ChromeItem(symbol: "doc.on.doc", tooltip: "Copy") { [weak self] in
+                self?.contentView.copyToPasteboard()
+            }
+        ]
+        items.append(contentsOf: contentView.chromeItems())
         rootView.setChromeItems(items)
-        rootView.zoomBadge.setPercentage(zoomPercentage)
+        rootView.updateZoomPercentage(zoomPercentage)
     }
 
     func makeContextMenu() -> NSMenu {
@@ -353,72 +438,70 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     /// menu and to extend the text view's built-in editing menu.
     func appendPinItems(to menu: NSMenu, includingContentItems: Bool) {
         if includingContentItems {
-            for item in contentView.contextMenuItems() { menu.addItem(item) }
-            if !menu.items.isEmpty { menu.addItem(.separator()) }
-            menu.addItem(actionItem("Copy Content") { [weak self] in self?.contentView.copyToPasteboard() })
-            menu.addItem(actionItem("Copy and Close Pin") { [weak self] in self?.copyAndClose() })
-        }
-        menu.addItem(actionItem(isAspectLocked ? "Unlock Aspect Ratio" : "Lock Aspect Ratio") { [weak self] in
-            self?.isAspectLocked.toggle()
-        })
-        menu.addItem(opacityItem())
-        if kind == .text {
-            menu.addItem(actionItem(rootView.drawsBackground ? "Use Transparent Background" : "Use Opaque Background") { [weak self] in
-                guard let self else { return }
-                self.setBackgroundVisible(!self.rootView.drawsBackground)
+            let contentItems = contentView.contextMenuItems()
+            for item in contentItems { menu.addItem(item) }
+            if !contentItems.isEmpty { menu.addItem(.separator()) }
+            menu.addItem(.pinAction("Copy", symbol: "doc.on.doc") { [weak self] in
+                self?.contentView.copyToPasteboard()
             })
-            menu.addItem(textModeItem())
+            menu.addItem(.pinAction("Copy and Close", symbol: "doc.on.doc.fill") { [weak self] in
+                self?.copyAndClose()
+            })
+            if let saveItem = contentView.saveContextMenuItem() {
+                menu.addItem(saveItem)
+            }
+            menu.addItem(.separator())
         }
+        for item in contentView.viewContextMenuItems() {
+            menu.addItem(item)
+        }
+        if contentView.contentAspectRatio != nil {
+            menu.addItem(.pinAction(
+                isAspectLocked ? "Unlock Aspect Ratio" : "Lock Aspect Ratio",
+                symbol: isAspectLocked ? "lock.open" : "lock"
+            ) { [weak self] in
+                self?.isAspectLocked.toggle()
+            })
+        }
+        menu.addItem(opacityItem())
         menu.addItem(.separator())
-        menu.addItem(actionItem("Hide Pin") { [weak self] in
+        menu.addItem(.pinAction("Hide Pin", symbol: "eye.slash") { [weak self] in
             self?.hidePin()
         })
-        menu.addItem(actionItem("Close Pin") { [weak self] in self?.closePin() })
-    }
-
-    private func actionItem(_ title: String, handler: @escaping () -> Void) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: #selector(MenuActionTarget.run(_:)), keyEquivalent: "")
-        let target = MenuActionTarget(handler: handler)
-        item.target = target
-        item.representedObject = target
-        return item
-    }
-
-    /// Per-window text mode picker. Choosing a mode here makes this pin stop
-    /// following the global default; other pins are unaffected.
-    private func textModeItem() -> NSMenuItem {
-        let current = (contentView as? TextPinView)?.textMode
-        let item = NSMenuItem(title: "Text Mode", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        for mode in TextContentMode.allCases {
-            let entry = actionItem(mode.title) { [weak self] in
-                guard let self, let textView = self.contentView as? TextPinView else { return }
-                textView.setTextMode(mode, explicit: true)
-                self.contentDidChange()
-            }
-            entry.state = current == mode ? .on : .off
-            submenu.addItem(entry)
-        }
-        item.submenu = submenu
-        return item
+        menu.addItem(.pinAction("Close Pin", symbol: "xmark") { [weak self] in
+            self?.closePin()
+        })
     }
 
     /// Per-pin opacity control embedded in the context menu: a labelled
     /// 0–100% slider that adjusts this window's `alphaValue` live.
     private func opacityItem() -> NSMenuItem {
+        let iconView = NSImageView()
+        iconView.image = NSMenuItem.pinMenuSymbol("circle.lefthalf.filled")
+        iconView.contentTintColor = .labelColor
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 16),
+            iconView.heightAnchor.constraint(equalToConstant: 16)
+        ])
+
         let label = NSTextField(labelWithString: "Opacity")
         label.font = .menuFont(ofSize: 0)
+        label.textColor = .labelColor
 
         let percent = NSTextField(labelWithString: "\(Int((opacity * 100).rounded()))%")
-        percent.font = .menuFont(ofSize: 0)
+        percent.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        percent.textColor = .secondaryLabelColor
         percent.alignment = .right
         percent.translatesAutoresizingMaskIntoConstraints = false
         percent.widthAnchor.constraint(equalToConstant: 36).isActive = true
 
         let slider = NSSlider(value: opacity, minValue: 0, maxValue: 1, target: nil, action: nil)
+        slider.controlSize = .small
         slider.isContinuous = true
         slider.translatesAutoresizingMaskIntoConstraints = false
-        slider.widthAnchor.constraint(equalToConstant: 130).isActive = true
+        slider.widthAnchor.constraint(equalToConstant: 110).isActive = true
 
         let target = MenuActionTarget { [weak self, weak slider, weak percent] in
             guard let self, let slider else { return }
@@ -428,10 +511,12 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         slider.target = target
         slider.action = #selector(MenuActionTarget.run(_:))
 
-        let row = NSStackView(views: [label, slider, percent])
-        row.spacing = 8
-        row.edgeInsets = NSEdgeInsets(top: 4, left: 14, bottom: 4, right: 12)
-        row.frame = NSRect(x: 0, y: 0, width: 250, height: 26)
+        let row = NSStackView(views: [iconView, label, slider, percent])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        row.edgeInsets = NSEdgeInsets(top: 4, left: 14, bottom: 4, right: 14)
+        row.frame = NSRect(x: 0, y: 0, width: 256, height: 26)
 
         let item = NSMenuItem()
         item.view = row
@@ -443,13 +528,13 @@ final class PinWindowController: NSObject, NSWindowDelegate {
 
     /// Opt a text pin back into the opaque "paper" look, per pin.
     func setBackgroundVisible(_ visible: Bool) {
-        hasExplicitBackground = true
+        backgroundPolicy = .explicit(visible: visible)
         applyBackground(visible: visible)
     }
 
     /// Set once the user toggles this pin's background: a theme change then
     /// leaves their choice alone.
-    private var hasExplicitBackground = false
+    private(set) var backgroundPolicy: BackgroundPolicy = .automatic
 
     /// The Markdown theme's paper for this pin, or nil when it keeps the
     /// standard background (not a Markdown pin, or a theme without paper).
@@ -458,10 +543,14 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         return Preferences.shared.markdownTheme.background
     }
 
-    /// Applies the Markdown theme's paper after a mode or theme change. A
-    /// background the user chose for this pin wins.
+    /// Applies the Markdown theme's paper or the standard opaque text background.
     func applyThemeBackground() {
-        applyBackground(visible: hasExplicitBackground ? rootView.drawsBackground : themedBackground != nil)
+        switch backgroundPolicy {
+        case .automatic:
+            applyBackground(visible: true)
+        case .explicit(let visible):
+            applyBackground(visible: visible)
+        }
     }
 
     private func applyBackground(visible: Bool) {
@@ -506,12 +595,43 @@ final class PinWindowController: NSObject, NSWindowDelegate {
 }
 
 /// Retains a closure for dynamically built menu items.
-final class MenuActionTarget: NSObject {
+final class MenuActionTarget: NSObject, NSMenuItemValidation {
     private let handler: () -> Void
+    private let isEnabled: Bool
 
-    init(handler: @escaping () -> Void) {
+    init(isEnabled: Bool = true, handler: @escaping () -> Void) {
+        self.isEnabled = isEnabled
         self.handler = handler
     }
 
     @objc func run(_ sender: Any?) { handler() }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { isEnabled }
+}
+
+extension NSMenuItem {
+    static func pinAction(
+        _ title: String,
+        symbol: String? = nil,
+        isEnabled: Bool = true,
+        handler: @escaping () -> Void
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(MenuActionTarget.run(_:)), keyEquivalent: "")
+        let target = MenuActionTarget(isEnabled: isEnabled, handler: handler)
+        item.target = target
+        item.representedObject = target
+        item.isEnabled = isEnabled
+        if let symbol {
+            item.image = pinMenuSymbol(symbol)
+        }
+        return item
+    }
+
+    static func pinMenuSymbol(_ name: String) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        image?.isTemplate = true
+        return image
+    }
 }

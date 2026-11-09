@@ -22,11 +22,15 @@ final class ColorSwatchButton: FirstMouseButton, NSPopoverDelegate {
     /// Title of the optional clear row in the popover.
     var clearTitle: String?
 
-    private var pickerPopover: NSPopover?
-    private var pickerView: ColorPickerView?
+    private struct PickerSession {
+        let popover: NSPopover
+        let view: ColorPickerView
+    }
+
+    private var session: PickerSession?
 
     /// True while this swatch's popover is open.
-    var isPicking: Bool { pickerPopover?.isShown ?? false }
+    var isPicking: Bool { session?.popover.isShown ?? false }
 
     init(tooltip: String, size: NSSize = NSSize(width: 26, height: 22)) {
         super.init(frame: NSRect(origin: .zero, size: size))
@@ -73,6 +77,7 @@ final class ColorSwatchButton: FirstMouseButton, NSPopoverDelegate {
     /// Opens the palette anchored to this swatch. Re-clicking the swatch or
     /// clicking anywhere outside closes it (transient popover).
     func showPicker() {
+        session?.popover.close()
         let popover = NSPopover()
         let picker = ColorPickerView(clearTitle: clearTitle)
         picker.selectedColor = color
@@ -84,8 +89,7 @@ final class ColorSwatchButton: FirstMouseButton, NSPopoverDelegate {
         popover.behavior = .transient
         popover.animates = false
         popover.delegate = self
-        pickerPopover = popover
-        pickerView = picker
+        session = PickerSession(popover: popover, view: picker)
         // Needed so the popover window can take key status for the HEX field.
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: bounds, of: self, preferredEdge: .minY)
@@ -106,11 +110,12 @@ final class ColorSwatchButton: FirstMouseButton, NSPopoverDelegate {
 
     /// Closes the popover, e.g. when the toolbar hides.
     func stopPicking() {
-        pickerPopover?.close()
+        session?.popover.close()
+        session = nil
     }
 
     func popoverDidClose(_ notification: Notification) {
-        pickerView = nil
+        session = nil
         needsDisplay = true
     }
 

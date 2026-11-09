@@ -200,6 +200,17 @@ final class MarkdownPinTests: XCTestCase {
         )
     }
 
+    func testSavingRichPinAsMarkdownKeepsHyperlinks() throws {
+        let rich = NSMutableAttributedString(string: "Read the docs.", attributes: ClipboardReader.defaultTextAttributes())
+        rich.addAttribute(.link, value: URL(string: "https://example.com/docs")!,
+                          range: (rich.string as NSString).range(of: "docs"))
+        let pin = manager.createPin(content: .text(rich), textMode: .richText)
+        let view = try XCTUnwrap(pin.contentView as? TextPinView)
+
+        XCTAssertEqual(String(data: view.markdownData(), encoding: .utf8),
+                       "Read the [docs](https://example.com/docs).")
+    }
+
     func testPastingHTMLWithHyperlinksAndSwitchingToMarkdownKeepsLinksClean() throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("pinboard.markdown.html-links"))
         pasteboard.clearContents()

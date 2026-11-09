@@ -464,9 +464,13 @@ final class AnnotationToolbar: AttachedToolbar, NSComboBoxDelegate {
     @objc private func duplicate() { canvas?.duplicateSelection() }
     @objc private func deleteSelection() { canvas?.deleteSelection() }
     @objc private func resetAll() {
-        canvas?.commitTextEditor()
-        canvas?.store.reset()
-        pin?.refreshAfterStoreChange()
+        if let pin {
+            pin.restoreOriginalImage()
+        } else {
+            canvas?.commitTextEditor()
+            canvas?.cancelCrop()
+            canvas?.store.reset()
+        }
     }
     @objc private func finish() { pin?.endEditing() }
 }

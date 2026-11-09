@@ -32,9 +32,18 @@ protocol PinContentDisplaying: NSView {
     /// image pins keep annotating (colour panel, save sheet, ...).
     func handleResignKey()
 
-    /// Items merged into the hover chrome, left of the close button.
+    /// Corner control shown at the bottom-left of the pin (e.g. Annotate / Edit).
+    func editChromeItem() -> ChromeItem?
+    /// Corner control shown at the bottom-right of the pin (e.g. Save as PNG / Save as Markdown).
+    func saveChromeItem() -> ChromeItem?
+    /// Action items merged into the center hover chrome alongside Copy.
     func chromeItems() -> [ChromeItem]
+    /// Content-editing actions shown at the top of the pin's context menu.
     func contextMenuItems() -> [NSMenuItem]
+    /// Export/save action grouped with Copy in the pin's context menu.
+    func saveContextMenuItem() -> NSMenuItem?
+    /// Content-specific display or sizing options in the pin's context menu.
+    func viewContextMenuItems() -> [NSMenuItem]
 }
 
 extension PinContentDisplaying {
@@ -50,6 +59,10 @@ extension PinContentDisplaying {
     func cursor(at point: NSPoint) -> NSCursor { .openHand }
     var pinUndoManager: UndoManager? { nil }
     func handleResignKey() { endEditing() }
+    func editChromeItem() -> ChromeItem? { nil }
+    func saveChromeItem() -> ChromeItem? { nil }
     func chromeItems() -> [ChromeItem] { [] }
     func contextMenuItems() -> [NSMenuItem] { [] }
+    func saveContextMenuItem() -> NSMenuItem? { nil }
+    func viewContextMenuItems() -> [NSMenuItem] { [] }
 }

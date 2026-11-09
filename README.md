@@ -40,8 +40,7 @@ AppKit.
   window from following the global default.
 - **Markdown themes**: Colour a whole Markdown pin, paper included:
   *Default* (system colours) and *Everforest Dark Hard*, picked with a live
-  preview under **Settings → Text**. The source you edit stays the same; a
-  pin you switched to a transparent background keeps it.
+  preview under **Settings → Text**. The source you edit stays the same.
 - **Image annotation**: Rectangle, ellipse, tapered fancy arrows (drag the
   midpoint handle to curve), line, freehand, text (plain, solid pill box and
   outlined box styles), numbered counters, highlighter (rectangle and freehand
@@ -64,8 +63,12 @@ AppKit.
   goes back to the list.
   Clear History reveals cancel and red trash icons for confirmation and keeps
   records associated with open pins. Retention is configurable in Settings.
-- **Transparent text pins**: Text floats directly over the desktop; only
-  runs you explicitly give a background to show one.
+- **Pin window controls**: Hovering a pin shows Close (top left), Hide (top
+  right), Edit or Annotate (bottom left), Save (bottom right: PNG for images,
+  Markdown for text) and Copy (centre). Pinch or scroll over an image pin to
+  zoom; a badge shows the scale while it is not 100% and resets it on click.
+  Text pins sit on an opaque paper sized to their content, and resize from
+  their edges and re-wrap instead of zooming.
 - **Global hotkey**: `⌃⌥⇧⌘P` (Hyper+P) pins the clipboard from anywhere;
   re-recordable in Settings.
 - **URL Scheme**: Drive Pinboard from scripts and other apps (below).

@@ -40,14 +40,31 @@ final class ImagePinView: NSView, PinContentDisplaying {
     var contentAspectRatio: CGSize? { sourceRect.size }
     var pinUndoManager: UndoManager? { isAnnotating ? annotationStore.undoManager : nil }
 
+    /// Tracks how the pin window's geometry corresponds to the uncropped/cropped
+    /// source region so undoing a crop restores the exact pre-crop window size.
+    enum CropGeometryState: Equatable {
+        case uncropped(sourceSize: CGSize)
+        case cropped(sourceSize: CGSize, uncroppedWindowSize: CGSize, croppedWindowSize: CGSize)
+
+        var sourceSize: CGSize {
+            switch self {
+            case .uncropped(let size), .cropped(let size, _, _): return size
+            }
+        }
+
+        var uncroppedWindowSize: CGSize? {
+            if case .cropped(_, let uncropped, _) = self { return uncropped }
+            return nil
+        }
+    }
+
     private var pixelSize: CGSize { baseImage.pixelSize }
     private var sourceRect: CGRect { annotationStore.cropRect ?? CGRect(origin: .zero, size: pixelSize) }
-    private var displayedSourceSize: CGSize
-    private var uncroppedWindowSize: (uncropped: CGSize, cropped: CGSize)?
+    private(set) var cropGeometryState: CropGeometryState
 
     init(image: NSImage, annotations: AnnotationStore.Payload? = nil) {
         baseImage = image
-        displayedSourceSize = image.pixelSize
+        cropGeometryState = .uncropped(sourceSize: image.pixelSize)
         baseCGImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         effects = baseCGImage.map(ImageEffects.init(base:))
         canvas = AnnotationCanvasView(store: annotationStore, imageSize: image.pixelSize, effects: effects)
@@ -160,30 +177,52 @@ final class ImagePinView: NSView, PinContentDisplaying {
     }
 
     func refreshAfterStoreChange() {
-        let previousSize = displayedSourceSize
-        displayedSourceSize = sourceRect.size
+        let previousSize = cropGeometryState.sourceSize
+        let currentSourceSize = sourceRect.size
         canvas.reconcileSelection()
         updateContentsRect()
-        if previousSize != displayedSourceSize,
+        if previousSize != currentSourceSize,
            previousSize.width > 0, previousSize.height > 0,
            let window {
             if annotationStore.cropRect == nil,
-               let saved = uncroppedWindowSize,
-               window.frame.size == saved.cropped {
-                uncroppedWindowSize = nil
-                resize(to: saved.uncropped)
+               case .cropped(_, let uncropped, let cropped) = cropGeometryState,
+               window.frame.size == cropped {
+                cropGeometryState = .uncropped(sourceSize: currentSourceSize)
+                resize(to: uncropped)
             } else {
-                let beforeCrop = previousSize == pixelSize ? window.frame.size : uncroppedWindowSize?.uncropped
+                let beforeCrop = previousSize == pixelSize ? window.frame.size : cropGeometryState.uncroppedWindowSize
                 let scaleX = window.frame.width / previousSize.width
                 let scaleY = window.frame.height / previousSize.height
                 applyCrop(displayScale: (x: scaleX, y: scaleY))
                 if let beforeCrop, annotationStore.cropRect != nil {
-                    uncroppedWindowSize = (uncropped: beforeCrop, cropped: window.frame.size)
+                    cropGeometryState = .cropped(
+                        sourceSize: currentSourceSize,
+                        uncroppedWindowSize: beforeCrop,
+                        croppedWindowSize: window.frame.size
+                    )
+                } else {
+                    cropGeometryState = .uncropped(sourceSize: currentSourceSize)
                 }
+            }
+        } else {
+            switch cropGeometryState {
+            case .uncropped:
+                cropGeometryState = .uncropped(sourceSize: currentSourceSize)
+            case .cropped(_, let uncropped, let cropped):
+                cropGeometryState = annotationStore.cropRect == nil
+                    ? .uncropped(sourceSize: currentSourceSize)
+                    : .cropped(sourceSize: currentSourceSize, uncroppedWindowSize: uncropped, croppedWindowSize: cropped)
             }
         }
         canvas.needsDisplay = true
         annotationToolbar?.syncSelection()
+    }
+
+    func restoreOriginalImage() {
+        canvas.commitTextEditor()
+        canvas.cancelCrop()
+        annotationStore.reset()
+        refreshAfterStoreChange()
     }
 
     /// Restores annotations from a history record so re-pinned images stay editable.
@@ -259,40 +298,59 @@ final class ImagePinView: NSView, PinContentDisplaying {
         return pasteboard.writeObjects([image])
     }
 
-    func chromeItems() -> [ChromeItem] {
-        [ChromeItem(symbol: isAnnotating ? "checkmark" : "pencil.tip.crop.circle",
-                    tooltip: isAnnotating ? "Done Editing" : "Annotate Image",
-                    action: { [weak self] in
-                        guard let self else { return }
-                        self.isAnnotating ? self.endEditing() : self.beginAnnotating()
-                    },
-                    isToggled: isAnnotating),
-         ChromeItem(symbol: "square.and.arrow.down", tooltip: "Save as PNG") { [weak self] in
-             self?.saveToFile()
-         }]
+    func editChromeItem() -> ChromeItem? {
+        ChromeItem(symbol: isAnnotating ? "checkmark" : "pencil",
+                   tooltip: isAnnotating ? "Done Editing" : "Annotate Image",
+                   action: { [weak self] in
+                       guard let self else { return }
+                       self.isAnnotating ? self.endEditing() : self.beginAnnotating()
+                   },
+                   isToggled: isAnnotating)
     }
+
+    func saveChromeItem() -> ChromeItem? {
+        ChromeItem(symbol: "square.and.arrow.down", tooltip: "Save as PNG") { [weak self] in
+            self?.saveToFile()
+        }
+    }
+
+    func chromeItems() -> [ChromeItem] { [] }
 
     func contextMenuItems() -> [NSMenuItem] {
-        [menuItem(isAnnotating ? "Done Editing" : "Annotate Image…") { [weak self] in
-            guard let self else { return }
-            self.isAnnotating ? self.endEditing() : self.beginAnnotating()
-         },
-         menuItem("Default Size") { [weak self] in self?.resize(to: self?.naturalPointSize) },
-         menuItem("Actual Pixel Size") { [weak self] in self?.resize(to: self?.sourceRect.size) },
-         menuItem("Restore Original Image") { [weak self] in
-            self?.canvas.commitTextEditor()
-            self?.annotationStore.reset()
-            self?.refreshAfterStoreChange()
-         },
-         menuItem("Save as PNG…") { [weak self] in self?.saveToFile() }]
+        let canRestore = !annotationStore.isEmpty || canvas.hasUncommittedDraft
+        return [
+            .pinAction(
+                isAnnotating ? "Done Editing" : "Annotate Image",
+                symbol: isAnnotating ? "checkmark.circle" : "pencil"
+            ) { [weak self] in
+                guard let self else { return }
+                self.isAnnotating ? self.endEditing() : self.beginAnnotating()
+            },
+            .pinAction(
+                "Restore Original Image",
+                symbol: "arrow.counterclockwise",
+                isEnabled: canRestore
+            ) { [weak self] in
+                self?.restoreOriginalImage()
+            }
+        ]
     }
 
-    private func menuItem(_ title: String, handler: @escaping () -> Void) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: #selector(MenuActionTarget.run(_:)), keyEquivalent: "")
-        let target = MenuActionTarget(handler: handler)
-        item.target = target
-        item.representedObject = target
-        return item
+    func saveContextMenuItem() -> NSMenuItem? {
+        .pinAction("Save as PNG…", symbol: "square.and.arrow.down") { [weak self] in
+            self?.saveToFile()
+        }
+    }
+
+    func viewContextMenuItems() -> [NSMenuItem] {
+        [
+            .pinAction("Default Size", symbol: "1.magnifyingglass") { [weak self] in
+                self?.resize(to: self?.naturalPointSize)
+            },
+            .pinAction("Actual Pixel Size", symbol: "arrow.up.left.and.down.right.magnifyingglass") { [weak self] in
+                self?.resize(to: self?.sourceRect.size)
+            }
+        ]
     }
 
     private func resize(to size: CGSize?) {

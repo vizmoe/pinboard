@@ -89,17 +89,17 @@ final class MarkdownThemeTests: XCTestCase {
         XCTAssertEqual(canonical.string, "# Chart\n\nBody text", "the theme never enters the content")
     }
 
-    func testStandardMarkdownPinStaysTransparent() throws {
+    func testStandardMarkdownPinUsesOpaqueSystemPaper() throws {
         let (pin, _) = try makeMarkdownPin("# Title")
 
-        XCTAssertFalse(pin.rootView.drawsBackground, "the default theme keeps text pins transparent")
+        XCTAssertTrue(pin.rootView.drawsBackground, "text pins use an opaque background by default")
         XCTAssertNil(pin.rootView.themedBackground)
-        XCTAssertEqual(pin.rootView.effectiveBackgroundColor.alphaComponent, 0)
+        XCTAssertEqual(pin.rootView.effectiveBackgroundColor, .textBackgroundColor)
     }
 
     func testThemeChangeRepaintsOpenMarkdownPins() throws {
         let (pin, view) = try makeMarkdownPin("# Title\n\nBody")
-        XCTAssertFalse(pin.rootView.drawsBackground)
+        XCTAssertTrue(pin.rootView.drawsBackground)
         XCTAssertNotEqual(try bodyColor(of: view), "#D3C6AA")
 
         Preferences.shared.markdownTheme = .everforestDarkHard
@@ -129,7 +129,8 @@ final class MarkdownThemeTests: XCTestCase {
         view.setTextMode(.richText, explicit: true)
 
         XCTAssertEqual(view.textMode, .richText)
-        XCTAssertFalse(pin.rootView.drawsBackground, "the theme paper belongs to Markdown")
+        XCTAssertTrue(pin.rootView.drawsBackground, "rich text keeps the standard opaque paper")
+        XCTAssertNil(pin.rootView.themedBackground, "the theme paper belongs to Markdown")
         let converted = view.attributedString
         XCTAssertFalse(colors(in: converted, .foregroundColor).contains("#D3C6AA"),
                        "rich text keeps the standard colours")
