@@ -121,7 +121,7 @@ final class ColorPickerView: NSView, NSTextFieldDelegate {
     func applyHexField() -> Bool {
         guard let parsed = NSColor(hex: hexField.stringValue) else {
             hexField.textColor = .systemRed
-            hexField.toolTip = "Invalid HEX colour — expected #RRGGBB or #RRGGBBAA"
+            hexField.toolTip = "Invalid HEX colour (use #RRGGBB or #RRGGBBAA)"
             return false
         }
         hexField.textColor = .labelColor

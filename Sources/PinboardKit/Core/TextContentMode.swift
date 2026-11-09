@@ -20,4 +20,20 @@ enum TextContentMode: String, Codable, CaseIterable, Identifiable {
         case .plainText: return "Plain Text"
         }
     }
+
+    var menuTitle: String {
+        switch self {
+        case .richText: return "Rich Text"
+        case .markdown: return "Markdown"
+        case .plainText: return "Plain Text"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .richText: return "doc.richtext"
+        case .markdown: return "doc.text"
+        case .plainText: return "doc.plaintext"
+        }
+    }
 }

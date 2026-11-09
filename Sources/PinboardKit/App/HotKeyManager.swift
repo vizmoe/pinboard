@@ -17,9 +17,14 @@ final class HotKeyManager {
         carbonModifiers: Preferences.defaultHotkeyModifiers
     )
 
+    private struct Binding {
+        let shortcut: Shortcut
+        let ref: EventHotKeyRef
+    }
+
     var onTrigger: (() -> Void)?
-    private(set) var current: Shortcut?
-    private var hotKeyRef: EventHotKeyRef?
+    private var binding: Binding?
+    var current: Shortcut? { binding?.shortcut }
     private var handlerRef: EventHandlerRef?
     private static let hotKeyID = EventHotKeyID(signature: OSType(0x50424B48 /* 'PBKH' */), id: 1)
 
@@ -62,17 +67,15 @@ final class HotKeyManager {
         // Keep the existing binding live until its replacement is secured.
         // Settings retains the old shortcut when registration fails.
         unregister()
-        hotKeyRef = ref
-        current = shortcut
+        binding = Binding(shortcut: shortcut, ref: ref)
         return true
     }
 
     func unregister() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
+        if let binding {
+            UnregisterEventHotKey(binding.ref)
+            self.binding = nil
         }
-        current = nil
     }
 
     private func installHandlerIfNeeded() {

@@ -11,11 +11,28 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     let imageSize: CGSize
     var effects: ImageEffects?
 
+    /// Mutually-exclusive interactive edit session on the annotation canvas.
+    /// Bundling the live preview/editor state into a single sum type makes
+    /// overlapping states (e.g. a dangling `suppressedID`, an orphaned
+    /// `NSTextField` without an `editingAnnotation`, or a crop marquee
+    /// coexisting with shape dragging) unrepresentable.
+    enum EditSession {
+        case idle
+        /// Live preview while drawing a new shape (`replacingID == nil`) or
+        /// moving/resizing a committed shape (`replacingID == annotation.id`).
+        case draggingShape(draft: Annotation, replacingID: UUID?)
+        /// Live on-canvas text field editing a new (`isExisting == false`) or
+        /// committed (`isExisting == true`) text annotation.
+        case editingText(field: NSTextField, annotation: Annotation, isExisting: Bool)
+        /// Unconfirmed crop marquee in image pixel coordinates.
+        case cropping(rect: CGRect)
+    }
+
     var tool: AnnotationTool = .select {
         willSet { if newValue != tool { commitTextEditor() } }
         didSet {
             if tool != .select, selectedAnnotation?.tool != tool { selectedID = nil }
-            if tool != .crop { cropDraft = nil }
+            if tool != .crop, case .cropping = editSession { editSession = .idle }
             needsDisplay = true
             onSelectionChange?()
         }
@@ -29,8 +46,8 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
         didSet {
             if !isActive {
                 selectedID = nil
-                cropDraft = nil
                 commitTextEditor()
+                editSession = .idle
             }
             needsDisplay = true
         }
@@ -42,11 +59,55 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     /// Lets the toolbar react to selection changes (e.g. to show text style
     /// controls when a text annotation is picked).
     var onSelectionChange: (() -> Void)?
-    private var draft: Annotation?
-    private var suppressedID: UUID?
-    private var cropDraft: CGRect?
-    private var textEditor: NSTextField?
-    private var editingAnnotation: Annotation?
+    private(set) var editSession: EditSession = .idle
+
+    private var draft: Annotation? {
+        if case .draggingShape(let draft, _) = editSession { return draft }
+        return nil
+    }
+
+    private var suppressedID: UUID? {
+        switch editSession {
+        case .draggingShape(_, let replacingID):
+            return replacingID
+        case .editingText(_, let annotation, isExisting: true):
+            return annotation.id
+        case .idle, .editingText(_, _, isExisting: false), .cropping:
+            return nil
+        }
+    }
+
+    var cropDraft: CGRect? {
+        get {
+            if case .cropping(let rect) = editSession { return rect }
+            return nil
+        }
+        set {
+            if let rect = newValue {
+                commitTextEditor()
+                editSession = .cropping(rect: rect)
+            } else if case .cropping = editSession {
+                editSession = .idle
+            }
+        }
+    }
+
+    private var textEditor: NSTextField? {
+        if case .editingText(let field, _, _) = editSession { return field }
+        return nil
+    }
+
+    private var editingAnnotation: Annotation? {
+        if case .editingText(_, let annotation, _) = editSession { return annotation }
+        return nil
+    }
+
+    var hasUncommittedDraft: Bool {
+        switch editSession {
+        case .idle: return false
+        case .draggingShape, .editingText, .cropping: return true
+        }
+    }
 
     override var isFlipped: Bool { false }
     override var acceptsFirstResponder: Bool { isActive }
@@ -209,7 +270,7 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
         guard let window else { return }
         let start = imagePoint(from: startView)
         var annotation = Annotation(tool: tool, points: [start], style: style)
-        NSCursor.crosshair.set()
+        WindowInteraction.applyCursor(.crosshair)
 
         let isFreehandPath = tool == .freehand || (tool == .highlight && style.highlightMode == .freehand)
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
@@ -220,12 +281,12 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
             } else {
                 annotation.points = [start, current]
             }
-            draft = annotation
+            editSession = .draggingShape(draft: annotation, replacingID: nil)
             needsDisplay = true
             if event.type == .leftMouseUp { break }
         }
 
-        draft = nil
+        editSession = .idle
         if isMeaningful(annotation) {
             store.add(annotation)
             selectedID = annotation.id
@@ -253,23 +314,22 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
         guard let window else { return }
         let start = imagePoint(from: startView)
         var moved = annotation
-        suppressedID = annotation.id
-        NSCursor.closedHand.set()
+        editSession = .draggingShape(draft: annotation, replacingID: annotation.id)
+        WindowInteraction.applyCursor(.closedHand)
 
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             let current = imagePoint(from: convert(event.locationInWindow, from: nil))
             var candidate = annotation
             candidate.translate(by: CGVector(dx: current.x - start.x, dy: current.y - start.y))
             moved = candidate
-            draft = candidate
+            editSession = .draggingShape(draft: candidate, replacingID: annotation.id)
             needsDisplay = true
             if event.type == .leftMouseUp { break }
         }
 
-        suppressedID = nil
-        draft = nil
+        editSession = .idle
         if moved != annotation { store.update(moved) }
-        NSCursor.openHand.set()
+        WindowInteraction.applyCursor(.openHand)
         needsDisplay = true
     }
 
@@ -312,7 +372,7 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
             ? handles[0]
             : handles[isLine ? 1 - handle : (handle + 2) % 4]
         var resized = annotation
-        suppressedID = annotation.id
+        editSession = .draggingShape(draft: annotation, replacingID: annotation.id)
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             if event.type == .leftMouseUp { break }
             var point = imagePoint(from: convert(event.locationInWindow, from: nil))
@@ -326,11 +386,10 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
             } else {
                 resized.points = [fixed, point]
             }
-            draft = resized
+            editSession = .draggingShape(draft: resized, replacingID: annotation.id)
             needsDisplay = true
         }
-        suppressedID = nil
-        draft = nil
+        editSession = .idle
         if resized != annotation, isMeaningful(resized) { store.update(resized, actionName: "Resize Annotation") }
         needsDisplay = true
     }
@@ -367,7 +426,7 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     private func runCropLoop(from startView: NSPoint) {
         guard let window else { return }
         let start = imagePoint(from: startView)
-        NSCursor.crosshair.set()
+        WindowInteraction.applyCursor(.crosshair)
 
         while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
             let current = imagePoint(from: convert(event.locationInWindow, from: nil))
@@ -461,7 +520,8 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     }
 
     var isEditingText: Bool {
-        textEditor != nil && editingAnnotation != nil
+        if case .editingText = editSession { return true }
+        return false
     }
 
     /// Programmatic selection (the toolbar and tests use this; nil clears).
@@ -475,10 +535,10 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     /// is selected, updates only that annotation (undoable via the store);
     /// otherwise updates the style new annotations receive on this pin.
     func updateSelectedStyle(_ mutate: (inout AnnotationStyle) -> Void) {
-        if var editing = editingAnnotation {
-            editing.text = textEditor?.stringValue ?? editing.text
+        if case .editingText(let field, var editing, let isExisting) = editSession {
+            editing.text = field.stringValue
             mutate(&editing.style)
-            editingAnnotation = editing
+            editSession = .editingText(field: field, annotation: editing, isExisting: isExisting)
             refreshTextEditorAppearance()
             if store.annotation(with: editing.id) != nil {
                 store.update(editing, actionName: "Style Annotation")
@@ -515,8 +575,8 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     /// Never commits the editor or adds an undo step just to open a menu.
     var previewAnnotations: [Annotation] {
         var annotations = store.annotations
-        if var annotation = editingAnnotation, let textEditor {
-            annotation.text = textEditor.stringValue
+        if case .editingText(let field, var annotation, _) = editSession {
+            annotation.text = field.stringValue
             if let index = annotations.firstIndex(where: { $0.id == annotation.id }) {
                 annotations[index] = annotation
             } else {
@@ -532,8 +592,6 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     }
 
     func beginTextEditing(for annotation: Annotation) {
-        suppressedID = annotation.id
-        needsDisplay = true
         presentTextEditor(for: annotation, isNew: false)
     }
 
@@ -544,7 +602,6 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
         } else {
             selectedID = annotation.id
         }
-        editingAnnotation = annotation
 
         let field = NSTextField(frame: .zero)
         field.stringValue = annotation.text ?? ""
@@ -556,17 +613,18 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
         field.target = self
         field.action = #selector(textEditorCommitted)
         addSubview(field)
-        textEditor = field
+        editSession = .editingText(field: field, annotation: annotation, isExisting: !isNew)
         refreshTextEditorAppearance()
+        needsDisplay = true
         imagePin?.pinController?.requestKeyboardFocus()
         window?.makeFirstResponder(field)
         onSelectionChange?()
     }
 
     private func refreshTextEditorAppearance() {
-        guard let field = textEditor, var annotation = editingAnnotation else { return }
+        guard case .editingText(let field, var annotation, let isExisting) = editSession else { return }
         annotation.text = field.stringValue
-        editingAnnotation = annotation
+        editSession = .editingText(field: field, annotation: annotation, isExisting: isExisting)
         let origin = viewPoint(from: annotation.points.first ?? .zero)
         let fontSize = max(annotation.style.fontSize * scaleY, 6)
         let font = annotation.style.font(pointSize: fontSize)
@@ -587,12 +645,10 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
     }
 
     func commitTextEditor() {
-        guard let textEditor, var annotation = editingAnnotation else { return }
-        let value = textEditor.stringValue
-        textEditor.removeFromSuperview()
-        self.textEditor = nil
-        editingAnnotation = nil
-        suppressedID = nil
+        guard case .editingText(let field, var annotation, _) = editSession else { return }
+        let value = field.stringValue
+        field.removeFromSuperview()
+        editSession = .idle
 
         let existed = store.annotation(with: annotation.id) != nil
         annotation.text = value

@@ -102,8 +102,9 @@ Window management never inspects content specifics: pin views conform to
   `changeColor:` up the responder chain — letting a background pick silently
   overwrite the foreground colour.
 - Opacity is per-pin (`PinWindowController.opacity`, context-menu slider),
-  not a global preference — new pins are always 100%. Text pins' transparent
-  background is a separate concept and must stay regardless of opacity.
+  not a global preference — new pins are always 100%. Text pins paint an
+  opaque paper (`BackgroundPolicy.automatic`); opacity only changes the
+  window's alpha.
 - Annotation style is per-annotation (`Annotation.style`), editable via the
   toolbar when a shape is selected (`canvas.updateSelectedStyle` — never the
   global `Preferences` seed). `AnnotationStyle.fontName` is optional so old
@@ -128,13 +129,11 @@ Window management never inspects content specifics: pin views conform to
   they colour the render, the raw-source editor (text, caret, selection,
   `linkTextAttributes` — AppKit paints `.link` runs with those, not the run
   colour) and the pin paper (`PinRootView.themedBackground`). `.standard`
-  keeps the system colours and the usual transparent pin;
-  `everforestDarkHard` paints its bg0 paper, and
-  `PinWindowController.applyThemeBackground` then makes such pins opaque —
-  unless the user toggled the pin's own background (`hasExplicitBackground`),
-  which always wins. Rich and plain pins keep their own colours, and switching
-  a themed pin to rich text re-renders with the standard palette (light text
-  would otherwise sit on a transparent pin). The palette literals are the
+  keeps the system colours on the standard text paper; `everforestDarkHard`
+  paints its bg0 paper. A programmatic `setBackgroundVisible` sets
+  `BackgroundPolicy.explicit`, which `applyThemeBackground` always honours.
+  Rich and plain pins keep their own colours, and switching a themed pin to
+  rich text re-renders with the standard palette. The palette literals are the
   published Everforest Dark Hard values.
 - History: one directory per record under
   `~/Library/Application Support/Pinboard/History/<uuid>/` (`record.json` +

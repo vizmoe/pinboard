@@ -217,6 +217,79 @@ final class ReviewRegressionTests: XCTestCase {
         XCTAssertGreaterThan(restoredAttachment.bounds.width, 100)
     }
 
+    func testExplicitPinAndEditorStatesEnforceInvariants() throws {
+        let manager = PinWindowManager.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = HistoryStore(directory: directory)
+        manager.historyStore = store
+        defer {
+            manager.closeAll()
+            manager.historyStore = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        // 1. PinWindowController.LifecycleState & HistoryState & BackgroundPolicy
+        let pin = manager.createPin(content: .text(NSAttributedString(string: "State Machine Test")), textMode: .markdown)
+        XCTAssertEqual(pin.lifecycleState, .visible)
+        XCTAssertEqual(pin.backgroundPolicy, .automatic)
+        let recordID = try XCTUnwrap(pin.historyRecordID)
+        XCTAssertEqual(pin.historyState, .tracked(id: recordID, isDirty: false))
+
+        let textView = try XCTUnwrap(pin.contentView as? TextPinView)
+        XCTAssertEqual(textView.editingState, .idle)
+        XCTAssertEqual(textView.modeBinding, .explicit(.markdown))
+
+        textView.beginEditing(at: nil)
+        XCTAssertEqual(textView.editingState, .editing)
+        textView.editableTextView.insertText("!", replacementRange: NSRange(location: textView.editableTextView.string.utf16.count, length: 0))
+        XCTAssertEqual(pin.historyState, .tracked(id: recordID, isDirty: true))
+        manager.flushHistorySync(for: pin)
+        XCTAssertEqual(pin.historyState, .tracked(id: recordID, isDirty: false))
+        textView.endEditing()
+        XCTAssertEqual(textView.editingState, .idle)
+
+        // 2. Closed terminal state prevents resurrected windows
+        pin.hidePin()
+        XCTAssertEqual(pin.lifecycleState, .hidden)
+        pin.closePin()
+        XCTAssertEqual(pin.lifecycleState, .closed)
+        pin.showPin()
+        XCTAssertEqual(pin.lifecycleState, .closed, "closed is a terminal state; showPin() must be a no-op")
+        XCTAssertFalse(pin.panel.isVisible)
+
+        // 3. ImagePinView.CropGeometryState, AnnotationCanvasView.EditSession & PinRootView.ZoomBadgeState
+        let imgPin = manager.createPin(content: .image(TestImage.make(width: 300, height: 200)))
+        imgPin.setFrame(NSRect(x: -5000, y: -5000, width: 300, height: 200))
+        XCTAssertFalse(imgPin.rootView.isPointerInside)
+        XCTAssertEqual(imgPin.rootView.zoomBadgeState, .hidden)
+        imgPin.zoom(by: 1.25)
+        if case .transientFeedback = imgPin.rootView.zoomBadgeState {
+            // Expected
+        } else {
+            XCTFail("Expected .transientFeedback after zoom(by:) when pointer is outside")
+        }
+        imgPin.refreshChrome()
+        if case .transientFeedback = imgPin.rootView.zoomBadgeState {
+            // Expected: refreshChrome must not cancel the transient hide timer and strand the badge visible
+        } else {
+            XCTFail("Expected .transientFeedback to survive refreshChrome while pointer is outside")
+        }
+
+        let imageView = try XCTUnwrap(imgPin.contentView as? ImagePinView)
+        XCTAssertEqual(imageView.cropGeometryState, .uncropped(sourceSize: CGSize(width: 300, height: 200)))
+        imageView.beginAnnotating()
+        let canvas = try XCTUnwrap(imageView.subviews.compactMap { $0 as? AnnotationCanvasView }.first)
+        canvas.cropDraft = CGRect(x: 20, y: 20, width: 100, height: 80)
+        if case .cropping(let rect) = canvas.editSession {
+            XCTAssertEqual(rect, CGRect(x: 20, y: 20, width: 100, height: 80))
+        } else {
+            XCTFail("Expected .cropping editSession when cropDraft is active")
+        }
+        XCTAssertTrue(canvas.hasUncommittedDraft)
+        imageView.restoreOriginalImage()
+        XCTAssertNil(canvas.cropDraft, "restoreOriginalImage must also clear an unconfirmed cropDraft")
+    }
+
     func testHistoryEscapeStepsBackOneLevelBeforeDismissing() throws {
         let manager = PinWindowManager.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

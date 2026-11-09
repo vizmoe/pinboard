@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// Text pin. Rich text pins keep an `NSAttributedString` end to end so RTF
 /// attributes survive import, editing and copy-out untouched. Markdown pins
@@ -13,18 +14,44 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     /// network, and the view re-resolves after every re-render.
     var imageLoader: RemoteImageFetching = RemoteImageLoader.shared
 
-    private let scrollView = PinScrollView()
+    /// Explicit provenance of this pin's `TextContentMode` so following the
+    /// global default vs. an explicit per-pin choice is a single value.
+    enum ModeBinding: Equatable {
+        case followingDefault(TextContentMode)
+        case explicit(TextContentMode)
+
+        var mode: TextContentMode {
+            switch self {
+            case .followingDefault(let mode), .explicit(let mode): return mode
+            }
+        }
+
+        var isExplicit: Bool {
+            if case .explicit = self { return true }
+            return false
+        }
+    }
+
+    /// Explicit interaction state of a text pin.
+    enum EditingState: Equatable {
+        case idle
+        case editing
+    }
+
+    private let scrollView = NSScrollView()
     private let textView: PinTextView
     private let textUndoManager = UndoManager()
-    private(set) var isEditing = false
+    private(set) var editingState: EditingState = .idle
+    var isEditing: Bool { editingState == .editing }
     private(set) var formatToolbar: TextFormatToolbar?
     var pinUndoManager: UndoManager? { isEditing ? textUndoManager : nil }
 
+    private(set) var modeBinding: ModeBinding
     /// How this pin currently interprets its text.
-    private(set) var textMode: TextContentMode
+    var textMode: TextContentMode { modeBinding.mode }
     /// False while the pin follows `Preferences.textMode`. A per-window switch
     /// pins the mode so later global changes leave this pin alone.
-    private(set) var hasExplicitTextMode: Bool
+    var hasExplicitTextMode: Bool { modeBinding.isExplicit }
 
     /// Raw source for the non-rich modes. A Markdown pin renders it for
     /// display; a Plain Text pin shows it as-is. Rich pins never use it.
@@ -33,6 +60,9 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     /// the next content edit, so a switch made by accident — or by the global
     /// default — can be flipped back without losing formatting.
     private var modeBackup: (mode: TextContentMode, attributed: NSAttributedString)?
+    /// Tracks attachments currently awaiting an async remote fetch so repeated
+    /// `resolveDeferredImages()` passes never attach duplicate callbacks.
+    private var inFlightAttachments: Set<ObjectIdentifier> = []
 
     var minimumPinSize: CGSize { CGSize(width: 140, height: 56) }
 
@@ -111,8 +141,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     private let defaultLinkTextAttributes: [NSAttributedString.Key: Any]
 
     init(attributedString: NSAttributedString, mode: TextContentMode = .richText, hasExplicitMode: Bool = false) {
-        textMode = mode
-        hasExplicitTextMode = hasExplicitMode
+        modeBinding = hasExplicitMode ? .explicit(mode) : .followingDefault(mode)
         sourceText = mode == .markdown
             ? Self.markdownSource(from: attributedString)
             : attributedString.string
@@ -132,7 +161,6 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
         textView.pinView = self
         textView.delegate = self
-        scrollView.pinView = self
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -287,8 +315,11 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     /// rich text. The pre-switch representation is remembered until the next
     /// edit, so an immediate switch back restores it exactly.
     func setTextMode(_ mode: TextContentMode, explicit: Bool) {
-        if explicit { hasExplicitTextMode = true }
-        guard mode != textMode else { return }
+        let isExplicit = explicit || hasExplicitTextMode
+        guard mode != textMode else {
+            modeBinding = isExplicit ? .explicit(mode) : .followingDefault(mode)
+            return
+        }
         if isEditing { endEditing() }
 
         let previousMode = textMode
@@ -298,10 +329,18 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
             next = backup.attributed
             modeBackup = nil
         } else {
-            modeBackup = (previousMode, previous)
-            next = Self.convert(previous, from: previousMode, to: mode)
+            let sourceForConversion: (mode: TextContentMode, attributed: NSAttributedString)
+            if let backup = modeBackup, backup.mode == .richText {
+                sourceForConversion = backup
+            } else {
+                sourceForConversion = (previousMode, previous)
+                if modeBackup == nil || previousMode == .richText {
+                    modeBackup = (previousMode, previous)
+                }
+            }
+            next = Self.convert(sourceForConversion.attributed, from: sourceForConversion.mode, to: mode)
         }
-        textMode = mode
+        modeBinding = isExplicit ? .explicit(mode) : .followingDefault(mode)
         apply(canonical: next, mode: mode)
         if !isEditing { textView.setReadOnlyMode() }
         // A Markdown document can carry images, and a switch into rich text
@@ -435,6 +474,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     /// Installs a canonical representation for `mode` and shows it.
     private func apply(canonical attributed: NSAttributedString, mode: TextContentMode) {
+        inFlightAttachments.removeAll()
         textView.isRichText = mode == .richText
         switch mode {
         case .richText:
@@ -482,10 +522,11 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     func beginEditing(at pointInTextView: NSPoint?) {
         pinController?.requestKeyboardFocus()
-        if !isEditing {
-            isEditing = true
+        if editingState == .idle {
+            editingState = .editing
             if textMode == .markdown {
                 // Swap the rendered document for the source the user edits.
+                inFlightAttachments.removeAll()
                 textView.isRichText = false
                 textView.typingAttributes = sourceAttributes
                 textView.textStorage?.setAttributedString(
@@ -508,10 +549,11 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     }
 
     func endEditing() {
-        guard isEditing else { return }
-        isEditing = false
+        guard editingState == .editing else { return }
+        editingState = .idle
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         if textMode == .markdown {
+            inFlightAttachments.removeAll()
             sourceText = textView.string
             textView.isRichText = false
             textView.textStorage?.setAttributedString(
@@ -580,8 +622,11 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
                 install(data, for: image)
             } else if let url = URL(string: image.source),
                       url.scheme == "http" || url.scheme == "https" {
+                let attachmentID = ObjectIdentifier(image.attachment)
+                guard inFlightAttachments.insert(attachmentID).inserted else { continue }
                 imageLoader.fetch(url) { [weak self] data in
                     guard let self else { return }
+                    self.inFlightAttachments.remove(attachmentID)
                     if let data {
                         self.install(data, for: image)
                     } else {
@@ -720,11 +765,57 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
 
     func idealSize(fitting maxSize: CGSize) -> CGSize {
         let padding = CGFloat(Preferences.shared.textPadding)
-        let maxTextWidth = max(120, min(maxSize.width, 520) - padding * 2)
-        let measured = TextPinView.measure(displayAttributedString, maxWidth: maxTextWidth)
+        let text = displayAttributedString
+        let maxTextWidth = Self.idealWrapWidth(for: text, maxSize: maxSize, padding: padding)
+        let measured = TextPinView.measure(text, maxWidth: maxTextWidth)
         let width = min(max(measured.width + padding * 2 + 2, minimumPinSize.width), maxSize.width)
         let height = min(max(measured.height + padding * 2 + 2, minimumPinSize.height), maxSize.height)
         return CGSize(width: ceil(width), height: ceil(height))
+    }
+
+    /// Computes a wrap width tailored to the text volume so short snippets open
+    /// in compact cards while multi-paragraph notes scale up smoothly instead of
+    /// using a fixed width.
+    static func idealWrapWidth(for text: NSAttributedString, maxSize: CGSize, padding: CGFloat) -> CGFloat {
+        let maxAllowed = max(120, min(maxSize.width, 680) - padding * 2)
+        guard text.length > 0 else { return min(160, maxAllowed) }
+
+        let fullRange = NSRange(location: 0, length: text.length)
+        var hasAttachment = false
+        text.enumerateAttribute(.attachment, in: fullRange, options: []) { value, _, stop in
+            if value != nil {
+                hasAttachment = true
+                stop.pointee = true
+            }
+        }
+        if !hasAttachment {
+            text.enumerateAttribute(DeferredImages.sourceAttribute, in: fullRange, options: []) { value, _, stop in
+                if value != nil {
+                    hasAttachment = true
+                    stop.pointee = true
+                }
+            }
+        }
+
+        let minMultiLineWidth = min(240, maxAllowed)
+        let unwrapped = measure(text, maxWidth: 10_000)
+        if !hasAttachment {
+            if unwrapped.width <= minMultiLineWidth {
+                return max(120, unwrapped.width)
+            }
+            if !text.string.contains("\n"), unwrapped.width <= min(maxAllowed, 360) {
+                return unwrapped.width
+            }
+        }
+
+        let referenceWidth = min(460, maxAllowed)
+        let ref = measure(text, maxWidth: referenceWidth)
+        let area = max(ref.width, minMultiLineWidth) * max(ref.height, 24)
+        var target = ceil(sqrt(1.8 * area))
+        if hasAttachment {
+            target = max(target, min(maxAllowed, 520 - padding * 2))
+        }
+        return min(max(target, minMultiLineWidth), maxAllowed)
     }
 
     func currentContent() -> PinContent { .text(attributedString) }
@@ -751,32 +842,93 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         }
     }
 
-    func chromeItems() -> [ChromeItem] {
-        let tooltip: String
+    private var editActionTitle: String {
         switch (textMode, isEditing) {
-        case (.markdown, false): tooltip = "Edit Markdown Source"
-        case (_, true): tooltip = "Done Editing"
-        case (.richText, false), (.plainText, false): tooltip = "Edit Text"
+        case (.markdown, false): return "Edit Markdown Source"
+        case (_, true): return "Done Editing"
+        case (.richText, false), (.plainText, false): return "Edit Text"
         }
-        return [ChromeItem(symbol: isEditing ? "checkmark" : "pencil",
-                           tooltip: tooltip,
-                           action: { [weak self] in
-                               self?.toggleEditing()
-                               self?.pinController?.refreshChrome()
-                           },
-                           isToggled: isEditing)]
     }
 
-    func contextMenuItems() -> [NSMenuItem] {
-        let item = NSMenuItem(title: isEditing ? "Done Editing" : "Edit Text…",
-                              action: #selector(MenuActionTarget.run(_:)), keyEquivalent: "")
-        let target = MenuActionTarget { [weak self] in
-            self?.toggleEditing()
-            self?.pinController?.refreshChrome()
+    func editChromeItem() -> ChromeItem? {
+        ChromeItem(symbol: isEditing ? "checkmark" : "pencil",
+                   tooltip: editActionTitle,
+                   action: { [weak self] in
+                       self?.toggleEditing()
+                       self?.pinController?.refreshChrome()
+                   },
+                   isToggled: isEditing)
+    }
+
+    func saveChromeItem() -> ChromeItem? {
+        ChromeItem(symbol: "square.and.arrow.down", tooltip: "Save as Markdown") { [weak self] in
+            self?.saveToFile()
         }
-        item.target = target
-        item.representedObject = target
+    }
+
+    func chromeItems() -> [ChromeItem] { [] }
+
+    func contextMenuItems() -> [NSMenuItem] {
+        [
+            .pinAction(
+                editActionTitle,
+                symbol: isEditing ? "checkmark.circle" : "pencil"
+            ) { [weak self] in
+                self?.toggleEditing()
+                self?.pinController?.refreshChrome()
+            }
+        ]
+    }
+
+    func saveContextMenuItem() -> NSMenuItem? {
+        .pinAction("Save as Markdown…", symbol: "square.and.arrow.down") { [weak self] in
+            self?.saveToFile()
+        }
+    }
+
+    func viewContextMenuItems() -> [NSMenuItem] {
+        let item = NSMenuItem(title: "Text Mode", action: nil, keyEquivalent: "")
+        item.image = NSMenuItem.pinMenuSymbol("textformat")
+        let submenu = NSMenu()
+        for mode in TextContentMode.allCases {
+            let entry = NSMenuItem.pinAction(mode.menuTitle, symbol: mode.symbol) { [weak self] in
+                guard let self else { return }
+                self.setTextMode(mode, explicit: true)
+                self.pinController?.contentDidChange()
+            }
+            entry.state = textMode == mode ? .on : .off
+            submenu.addItem(entry)
+        }
+        item.submenu = submenu
         return [item]
+    }
+
+    // MARK: - Export
+
+    /// Markdown export: the source of a Markdown pin, the characters of a plain
+    /// pin, and a rich pin's text with its hyperlinks as `[label](url)`.
+    func markdownData() -> Data {
+        let source = textMode == .richText ? Self.markdownSource(from: attributedString) : attributedString.string
+        return Data(source.utf8)
+    }
+
+    func saveToFile() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let markdownType = UTType(filenameExtension: "md") ?? .plainText
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [markdownType]
+        panel.nameFieldStringValue = "Pinboard-\(formatter.string(from: Date())).md"
+        panel.canCreateDirectories = true
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            do {
+                try self.markdownData().write(to: url, options: .atomic)
+            } catch {
+                NSAlert(error: error).runModal()
+            }
+        }
     }
 
     // MARK: - Helpers
@@ -892,10 +1044,6 @@ final class PinTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
-    override func magnify(with event: NSEvent) {
-        pinView?.pinController?.handleMagnify(with: event)
-    }
-
     override func cancelOperation(_ sender: Any?) {
         pinView?.endEditing()
         pinView?.pinController?.refreshChrome()
@@ -922,32 +1070,18 @@ final class PinTextView: NSTextView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        guard let controller = pinView?.pinController else { return super.menu(for: event) }
+        guard isEditable else { return controller.makeContextMenu() }
         let menu = super.menu(for: event) ?? NSMenu()
-        guard let controller = pinView?.pinController else { return menu }
         menu.addItem(.separator())
-        if let pinView { pinView.contextMenuItems().forEach { menu.addItem($0) } }
+        if let pinView {
+            pinView.contextMenuItems().forEach { menu.addItem($0) }
+            if let saveItem = pinView.saveContextMenuItem() {
+                menu.addItem(saveItem)
+            }
+            menu.addItem(.separator())
+        }
         controller.appendPinItems(to: menu, includingContentItems: false)
         return menu
-    }
-}
-
-/// Scroll view that forwards trackpad pinch and horizontal/non-overflow
-/// two-finger swipe gestures to the pin window's zoom controller.
-final class PinScrollView: NSScrollView {
-    weak var pinView: TextPinView?
-
-    override func magnify(with event: NSEvent) {
-        pinView?.pinController?.handleMagnify(with: event)
-    }
-
-    override func scrollWheel(with event: NSEvent) {
-        guard let pinView else { return super.scrollWheel(with: event) }
-        let overflowsVertically = (documentView?.frame.height ?? 0) > contentSize.height + 1
-        let isHorizontalSwipe = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
-        if event.modifierFlags.contains(.command) || (!pinView.isEditing && (isHorizontalSwipe || !overflowsVertically)) {
-            pinView.pinController?.handleScrollWheel(with: event)
-            return
-        }
-        super.scrollWheel(with: event)
     }
 }

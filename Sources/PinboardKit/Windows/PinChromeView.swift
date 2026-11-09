@@ -19,19 +19,30 @@ final class FirstMouseSlider: NSSlider {
 
 final class ChromeButton: FirstMouseButton {
     var handler: (() -> Void)?
+    private(set) var isToggledItem: Bool = false
+    private let symbolPointSize: CGFloat
+    private let symbolWeight: NSFont.Weight
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false {
+        didSet { updateAppearance() }
+    }
 
-    init(item: ChromeItem, size: NSSize = NSSize(width: 24, height: 22)) {
+    init(
+        item: ChromeItem,
+        size: NSSize = NSSize(width: 38, height: 38),
+        symbolPointSize: CGFloat = 16,
+        symbolWeight: NSFont.Weight = .semibold,
+        hoverCornerRadius: CGFloat = 19
+    ) {
+        self.symbolPointSize = symbolPointSize
+        self.symbolWeight = symbolWeight
         super.init(frame: NSRect(origin: .zero, size: size))
-        handler = item.action
         bezelStyle = .regularSquare
         isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = hoverCornerRadius
+        layer?.cornerCurve = .continuous
         imagePosition = .imageOnly
-        toolTip = item.tooltip
-        setAccessibilityLabel(item.tooltip)
-        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
-        image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.tooltip)?
-            .withSymbolConfiguration(config)
-        contentTintColor = item.isToggled ? .controlAccentColor : .labelColor
         target = self
         action = #selector(fire)
         translatesAutoresizingMaskIntoConstraints = false
@@ -39,43 +50,102 @@ final class ChromeButton: FirstMouseButton {
             widthAnchor.constraint(equalToConstant: size.width),
             heightAnchor.constraint(equalToConstant: size.height)
         ])
+        configure(with: item)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
+    func configure(with item: ChromeItem) {
+        handler = item.action
+        isToggledItem = item.isToggled
+        toolTip = item.tooltip
+        setAccessibilityLabel(item.tooltip)
+        let config = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: symbolWeight)
+        image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.tooltip)?
+            .withSymbolConfiguration(config)
+        updateAppearance()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+
+    private func updateAppearance() {
+        contentTintColor = isToggledItem ? .controlAccentColor : .labelColor
+        if isToggledItem {
+            let alpha: CGFloat = isHovered ? 0.28 : 0.20
+            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(alpha).cgColor
+        } else if isHovered {
+            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.14).cgColor
+        } else {
+            layer?.backgroundColor = nil
+        }
+    }
+
     @objc private func fire() { handler?() }
 }
 
-/// Circular corner control (top-left Close, top-right Hide) matching CleanShot X's
-/// floating pin overlay aesthetic.
+/// Circular HUD button used for corner controls (Close, Hide, Annotate/Edit)
+/// and center action buttons (Copy, Save).
 final class PinCornerButtonView: NSVisualEffectView {
     private let button: ChromeButton
-    private static let diameter: CGFloat = 24
+    static let diameter: CGFloat = 28
 
     override var isFlipped: Bool { false }
 
-    init(symbol: String, tooltip: String) {
+    init(
+        symbol: String,
+        tooltip: String,
+        diameter: CGFloat = PinCornerButtonView.diameter,
+        symbolPointSize: CGFloat = 12.5,
+        symbolWeight: NSFont.Weight = .bold
+    ) {
         button = ChromeButton(
             item: ChromeItem(symbol: symbol, tooltip: tooltip, action: {}),
-            size: NSSize(width: Self.diameter, height: Self.diameter)
+            size: NSSize(width: diameter, height: diameter),
+            symbolPointSize: symbolPointSize,
+            symbolWeight: symbolWeight,
+            hoverCornerRadius: diameter / 2
         )
-        super.init(frame: NSRect(x: 0, y: 0, width: Self.diameter, height: Self.diameter))
+        super.init(frame: NSRect(x: 0, y: 0, width: diameter, height: diameter))
         material = .hudWindow
         blendingMode = .withinWindow
         state = .active
         wantsLayer = true
-        layer?.cornerRadius = Self.diameter / 2
+        layer?.cornerRadius = diameter / 2
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
         layer?.borderWidth = 0.5
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
         alphaValue = 0
 
         translatesAutoresizingMaskIntoConstraints = false
         addSubview(button)
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: Self.diameter),
-            heightAnchor.constraint(equalToConstant: Self.diameter),
+            widthAnchor.constraint(equalToConstant: diameter),
+            heightAnchor.constraint(equalToConstant: diameter),
             button.centerXAnchor.constraint(equalTo: centerXAnchor),
             button.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
@@ -85,15 +155,27 @@ final class PinCornerButtonView: NSVisualEffectView {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
+    }
+
     var onAction: (() -> Void)? {
         get { button.handler }
         set { button.handler = newValue }
     }
 
+    func configure(with item: ChromeItem) {
+        button.configure(with: item)
+    }
+
     func setVisible(_ visible: Bool, animated: Bool = true) {
         let target: CGFloat = visible ? 1 : 0
         guard abs(alphaValue - target) > 0.01 else { return }
-        guard animated else { alphaValue = target; return }
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            alphaValue = target
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             animator().alphaValue = target
@@ -101,12 +183,13 @@ final class PinCornerButtonView: NSVisualEffectView {
     }
 }
 
-/// Top-center pill badge showing the pin's live zoom percentage (e.g. `100%`).
-/// Clicking the badge resets the pin back to its 100% default size.
+/// Top-center pill badge showing the pin's live zoom percentage when scaled
+/// away from 100%. Clicking the badge resets the pin back to its 100% size.
 final class PinZoomBadgeView: NSVisualEffectView {
     private let button = FirstMouseButton()
     var onResetZoom: (() -> Void)?
     private(set) var percentage: Int = 100
+    var isZoomed: Bool { percentage != 100 }
 
     override var isFlipped: Bool { false }
 
@@ -116,16 +199,16 @@ final class PinZoomBadgeView: NSVisualEffectView {
         blendingMode = .withinWindow
         state = .active
         wantsLayer = true
-        layer?.cornerRadius = 11
+        layer?.cornerRadius = 13
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
         layer?.borderWidth = 0.5
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
         alphaValue = 0
 
         button.bezelStyle = .regularSquare
         button.isBordered = false
-        button.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         button.contentTintColor = .labelColor
         button.toolTip = "Reset Zoom (100%)"
         button.setAccessibilityLabel("Zoom 100 percent")
@@ -135,9 +218,9 @@ final class PinZoomBadgeView: NSVisualEffectView {
         addSubview(button)
         translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 22),
-            button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            heightAnchor.constraint(equalToConstant: 26),
+            button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             button.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
         setPercentage(100)
@@ -146,6 +229,11 @@ final class PinZoomBadgeView: NSVisualEffectView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
+    }
 
     func setPercentage(_ value: Int) {
         percentage = max(1, value)
@@ -157,7 +245,10 @@ final class PinZoomBadgeView: NSVisualEffectView {
     func setVisible(_ visible: Bool, animated: Bool = true) {
         let target: CGFloat = visible ? 1 : 0
         guard abs(alphaValue - target) > 0.01 else { return }
-        guard animated else { alphaValue = target; return }
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            alphaValue = target
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             animator().alphaValue = target
@@ -169,30 +260,23 @@ final class PinZoomBadgeView: NSVisualEffectView {
     }
 }
 
-/// Floating pill strip shown on hover at the bottom-center of a pin for
-/// content actions (Edit/Annotate, Copy, Save).
-final class PinChromeView: NSVisualEffectView {
+/// Center-aligned row of side-by-side circular HUD icon buttons (Copy, Save)
+/// shown on hover in the middle of a pin.
+final class PinChromeView: NSView {
+    static let buttonDiameter: CGFloat = 38
+    static let symbolPointSize: CGFloat = 16
     private let stack = NSStackView()
 
     override var isFlipped: Bool { false }
 
     init() {
         super.init(frame: .zero)
-        material = .hudWindow
-        blendingMode = .withinWindow
-        state = .active
         wantsLayer = true
-        layer?.cornerRadius = 7
-        layer?.cornerCurve = .continuous
-        layer?.masksToBounds = true
-        layer?.borderWidth = 0.5
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
         alphaValue = 0
 
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 1, left: 4, bottom: 1, right: 4)
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -209,26 +293,27 @@ final class PinChromeView: NSVisualEffectView {
 
     func setItems(_ items: [ChromeItem]) {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (index, item) in items.enumerated() {
-            if index > 0 {
-                let divider = NSView()
-                divider.wantsLayer = true
-                divider.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
-                divider.translatesAutoresizingMaskIntoConstraints = false
-                NSLayoutConstraint.activate([
-                    divider.widthAnchor.constraint(equalToConstant: 1),
-                    divider.heightAnchor.constraint(equalToConstant: 12)
-                ])
-                stack.addArrangedSubview(divider)
-            }
-            stack.addArrangedSubview(ChromeButton(item: item))
+        for item in items {
+            let buttonView = PinCornerButtonView(
+                symbol: item.symbol,
+                tooltip: item.tooltip,
+                diameter: Self.buttonDiameter,
+                symbolPointSize: Self.symbolPointSize,
+                symbolWeight: .semibold
+            )
+            buttonView.configure(with: item)
+            buttonView.setVisible(true, animated: false)
+            stack.addArrangedSubview(buttonView)
         }
     }
 
     func setVisible(_ visible: Bool, animated: Bool = true) {
         let target: CGFloat = visible ? 1 : 0
         guard abs(alphaValue - target) > 0.01 else { return }
-        guard animated else { alphaValue = target; return }
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            alphaValue = target
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
             animator().alphaValue = target

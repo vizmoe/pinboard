@@ -82,8 +82,8 @@ final class TextFormatToolbarTests: XCTestCase {
         view.editableTextView.setSelectedRange(NSRange(location: 0, length: 5))
         pick(.systemYellow, with: swatches(in: toolbar)[1])
 
-        XCTAssertFalse(pin.rootView.drawsBackground, "the pin window stays transparent")
-        XCTAssertEqual(pin.panel.backgroundColor, NSColor.clear)
+        XCTAssertTrue(pin.rootView.drawsBackground, "the pin window keeps its opaque paper")
+        XCTAssertEqual(pin.rootView.effectiveBackgroundColor, .textBackgroundColor)
         XCTAssertTrue(view.isFullyTransparent)
     }
 
