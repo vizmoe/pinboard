@@ -326,9 +326,11 @@ final class AnnotationToolbar: AttachedToolbar, NSComboBoxDelegate {
             widthSlider.toolTip = "Line Width"
         }
 
-        let family = effectiveStyle.fontName ?? TextDefaults.font.familyName ?? "Helvetica"
+        let family = TextDefaults.displayFontFamily(named: effectiveStyle.fontName)
         familyPopUp.selectItem(withTitle: family)
-        if familyPopUp.selectedItem == nil { familyPopUp.setTitle(family) }
+        if familyPopUp.selectedItem == nil {
+            familyPopUp.selectItem(withTitle: TextDefaults.font.familyName ?? "PingFang SC")
+        }
         let fontSize = effectiveStyle.fontSize
         sizeCombo.stringValue = fontSize == fontSize.rounded()
             ? String(Int(fontSize))

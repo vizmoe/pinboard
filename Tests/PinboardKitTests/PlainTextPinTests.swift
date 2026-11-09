@@ -205,4 +205,41 @@ final class TextDefaultsTests: XCTestCase {
         XCTAssertTrue(italic.fontDescriptor.symbolicTraits.contains(.italic) || (obliqueness ?? 0) > 0,
                       "emphasis stays visually distinct")
     }
+
+    func testAllTextModesShareIdenticalTypographyAndLayoutForUnstyledText() throws {
+        let manager = PinWindowManager.shared
+        defer { manager.closeAll() }
+        let sample = "First line of plain text\nSecond line of plain text"
+        let maxSize = CGSize(width: 500, height: 400)
+
+        let richPin = manager.createPin(
+            content: .text(NSAttributedString(string: sample, attributes: TextDefaults.attributes)),
+            textMode: .richText
+        )
+        let plainPin = manager.createPin(
+            content: .text(NSAttributedString(string: sample, attributes: TextDefaults.attributes)),
+            textMode: .plainText
+        )
+        let markdownPin = manager.createPin(
+            content: .text(NSAttributedString(string: sample, attributes: TextDefaults.attributes)),
+            textMode: .markdown
+        )
+
+        let richView = try XCTUnwrap(richPin.contentView as? TextPinView)
+        let plainView = try XCTUnwrap(plainPin.contentView as? TextPinView)
+        let markdownView = try XCTUnwrap(markdownPin.contentView as? TextPinView)
+
+        XCTAssertEqual(richView.idealSize(fitting: maxSize), plainView.idealSize(fitting: maxSize))
+        XCTAssertEqual(plainView.idealSize(fitting: maxSize), markdownView.idealSize(fitting: maxSize))
+
+        for view in [richView, plainView, markdownView] {
+            let storage = try XCTUnwrap(view.editableTextView.textStorage)
+            let font = try XCTUnwrap(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+            let paragraph = try XCTUnwrap(storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+            XCTAssertEqual(font.familyName, "PingFang SC")
+            XCTAssertEqual(font.pointSize, 14)
+            XCTAssertEqual(paragraph.lineSpacing, 2)
+            XCTAssertEqual(paragraph.paragraphSpacing, 0)
+        }
+    }
 }

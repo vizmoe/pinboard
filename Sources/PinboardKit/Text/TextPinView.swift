@@ -81,13 +81,16 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     /// Exposed for `TextFormatter`, which applies attributes to this view.
     var editableTextView: NSTextView { textView }
 
-    /// Monospaced while the raw Markdown source is being edited, so the source
-    /// reads as code rather than as the rendered document. Its colour follows
-    /// the theme, or the source would vanish on a dark paper.
-    static let sourceFont = TextDefaults.monospacedFont
+    /// Uses the app-wide default font and paragraph style while editing raw
+    /// Markdown source so typography and line layout stay unified across modes.
+    static let sourceFont = TextDefaults.font
 
     private static func sourceAttributes(for theme: MarkdownTheme) -> [NSAttributedString.Key: Any] {
-        [.font: sourceFont, .foregroundColor: theme.text]
+        [
+            .font: sourceFont,
+            .foregroundColor: theme.text,
+            .paragraphStyle: TextDefaults.paragraphStyle
+        ]
     }
 
     private var sourceAttributes: [NSAttributedString.Key: Any] {
@@ -337,9 +340,10 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
         textView.isRichText = mode == .richText
         switch mode {
         case .richText:
-            textView.textStorage?.setAttributedString(attributed)
-            textView.typingAttributes = attributed.length > 0
-                ? attributed.attributes(at: attributed.length - 1, effectiveRange: nil)
+            let styled = TextDefaults.applyingDefaults(to: attributed)
+            textView.textStorage?.setAttributedString(styled)
+            textView.typingAttributes = styled.length > 0
+                ? styled.attributes(at: styled.length - 1, effectiveRange: nil)
                 : ClipboardReader.defaultTextAttributes()
         case .plainText:
             sourceText = attributed.string
@@ -797,6 +801,26 @@ final class PinTextView: NSTextView {
     override func cancelOperation(_ sender: Any?) {
         pinView?.endEditing()
         pinView?.pinController?.refreshChrome()
+    }
+
+    override func paste(_ sender: Any?) {
+        super.paste(sender)
+        guard isRichText, let storage = textStorage, storage.length > 0 else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.beginEditing()
+        storage.enumerateAttribute(.font, in: fullRange, options: []) { value, range, _ in
+            if let font = value as? NSFont {
+                let concrete = TextDefaults.concreteFont(for: font)
+                if concrete !== font {
+                    storage.addAttribute(.font, value: concrete, range: range)
+                }
+            }
+        }
+        storage.endEditing()
+        if let font = typingAttributes[.font] as? NSFont {
+            typingAttributes[.font] = TextDefaults.concreteFont(for: font)
+        }
+        pinView?.formatToolbar?.syncFromSelection()
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
