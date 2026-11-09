@@ -30,6 +30,11 @@ final class TextFormatToolbar: AttachedToolbar, NSComboBoxDelegate {
         finalizeLayout()
     }
 
+    override func show(attachedTo parent: NSWindow) {
+        super.show(attachedTo: parent)
+        syncFromSelection()
+    }
+
     /// Hands the shared colour panel back when editing finishes.
     override func hide() {
         textColorSwatch.stopPicking()
@@ -113,15 +118,19 @@ final class TextFormatToolbar: AttachedToolbar, NSComboBoxDelegate {
     // MARK: - State sync
 
     /// Reflects the font and attributes at the caret or selection start.
+    var selectedFontFamilyTitle: String? { familyPopUp.titleOfSelectedItem }
+
     func syncFromSelection() {
         guard let formatter, panel.isVisible else { return }
         isSyncing = true
         defer { isSyncing = false }
 
         let font = formatter.currentFont
-        let family = font.familyName ?? font.fontName
+        let family = TextDefaults.displayFontFamily(for: font)
         familyPopUp.selectItem(withTitle: family)
-        if familyPopUp.selectedItem == nil { familyPopUp.setTitle(family) }
+        if familyPopUp.selectedItem == nil {
+            familyPopUp.selectItem(withTitle: TextDefaults.font.familyName ?? "PingFang SC")
+        }
 
         sizeCombo.stringValue = font.pointSize == font.pointSize.rounded()
             ? String(Int(font.pointSize))

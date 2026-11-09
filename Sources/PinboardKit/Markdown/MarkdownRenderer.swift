@@ -64,6 +64,7 @@ enum MarkdownRenderer {
     private final class Builder {
         let style: Style
         let output = NSMutableAttributedString()
+        private var lastBlockStart = 0
 
         init(style: Style) { self.style = style }
 
@@ -76,8 +77,21 @@ enum MarkdownRenderer {
                (output.attribute(.paragraphStyle, at: output.length - 1, effectiveRange: nil)
                 as? NSParagraphStyle)?.textBlocks.isEmpty != false {
                 output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1))
+                removeTrailingBlockSpacing()
             }
             return output
+        }
+
+        /// The gap after the last block would only pad the pin's bottom edge,
+        /// so a single paragraph lays out exactly like rich and plain text.
+        private func removeTrailingBlockSpacing() {
+            guard lastBlockStart < output.length else { return }
+            let last = NSRange(location: lastBlockStart, length: output.length - lastBlockStart)
+            output.enumerateAttribute(.paragraphStyle, in: last) { value, range, _ in
+                guard let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
+                style.paragraphSpacing = 0
+                output.addAttribute(.paragraphStyle, value: style, range: range)
+            }
         }
 
         func append(_ node: Node, indent: CGFloat = 0, quoteDepth: Int = 0, marker: String = "") {
@@ -97,7 +111,8 @@ enum MarkdownRenderer {
 
             var base = attributes
             let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = 2
+            paragraph.lineSpacing = TextDefaults.paragraphStyle.lineSpacing
+            // Blocks are joined by a single newline; this gap keeps them apart.
             paragraph.paragraphSpacing = 7
             let content: NSMutableAttributedString
             switch type {
@@ -109,7 +124,7 @@ enum MarkdownRenderer {
                 paragraph.paragraphSpacingBefore = level == 1 ? 10 : 8
                 paragraph.paragraphSpacing = 5
             case CMARK_NODE_CODE_BLOCK:
-                base[.font] = NSFont.monospacedSystemFont(ofSize: style.baseFont.pointSize * 0.95, weight: .regular)
+                base[.font] = TextDefaults.monospacedFont.withSize(style.baseFont.pointSize * 0.95)
                 base[.backgroundColor] = style.codeBackgroundColor
                 var text = String(cString: cmark_node_get_literal(node))
                 if text.hasSuffix("\n") { text.removeLast() }
@@ -151,6 +166,7 @@ enum MarkdownRenderer {
             }
             assembled.append(NSAttributedString(string: "\n", attributes: base))
             assembled.addAttribute(.paragraphStyle, value: paragraph, range: assembled.fullRange)
+            lastBlockStart = output.length
             output.append(assembled)
         }
 
@@ -222,7 +238,7 @@ enum MarkdownRenderer {
             case CMARK_NODE_SOFTBREAK, CMARK_NODE_LINEBREAK:
                 return NSAttributedString(string: "\n", attributes: attrs)
             case CMARK_NODE_CODE:
-                attrs[.font] = NSFont.monospacedSystemFont(ofSize: style.baseFont.pointSize * 0.95, weight: .regular)
+                attrs[.font] = TextDefaults.monospacedFont.withSize(style.baseFont.pointSize * 0.95)
                 attrs[.backgroundColor] = style.codeBackgroundColor
                 return NSAttributedString(string: String(cString: cmark_node_get_literal(node)), attributes: attrs)
             case CMARK_NODE_STRONG, CMARK_NODE_EMPH:

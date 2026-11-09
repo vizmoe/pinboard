@@ -167,4 +167,20 @@ final class TextFormatToolbarTests: XCTestCase {
         view.endEditing()
         XCTAssertFalse(swatch.isPicking)
     }
+
+    func testSystemUIFontResolvesToConcreteFontFamilyInToolbar() throws {
+        let systemText = NSAttributedString(
+            string: "System Font Text",
+            attributes: [.font: NSFont.systemFont(ofSize: 15)]
+        )
+        let pin = manager.createPin(content: .text(systemText), textMode: .richText)
+        let view = try XCTUnwrap(pin.contentView as? TextPinView)
+        view.beginEditing(at: nil)
+        let toolbar = try XCTUnwrap(view.formatToolbar)
+        toolbar.syncFromSelection()
+
+        let selectedTitle = try XCTUnwrap(toolbar.selectedFontFamilyTitle)
+        XCTAssertFalse(selectedTitle.hasPrefix("."), "toolbar must never show .AppleSystemUIFont")
+        XCTAssertEqual(selectedTitle, TextDefaults.font.familyName)
+    }
 }

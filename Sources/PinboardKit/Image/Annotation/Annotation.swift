@@ -141,14 +141,14 @@ struct AnnotationStyle: Codable, Equatable {
 
     var color: NSColor { NSColor(hex: colorHex) ?? .systemRed }
 
-    /// Resolves the annotation font: chosen family, or the system font.
+    /// Resolves the annotation font: chosen family, or the concrete default font.
     func font(pointSize: CGFloat) -> NSFont {
         let size = max(pointSize, 1)
-        if let fontName,
-           let font = NSFontManager.shared.font(withFamily: fontName, traits: [], weight: 5, size: size) {
+        let family = TextDefaults.displayFontFamily(named: fontName)
+        if let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size) {
             return font
         }
-        return .systemFont(ofSize: size, weight: .medium)
+        return TextDefaults.font.withSize(size)
     }
 
     static func current() -> AnnotationStyle {

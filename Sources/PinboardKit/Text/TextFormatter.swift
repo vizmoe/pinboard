@@ -119,7 +119,8 @@ struct TextFormatter {
     func clearFormatting() {
         let baseAttributes: [NSAttributedString.Key: Any] = [
             .font: TextFormatter.baseFont,
-            .foregroundColor: NSColor.labelColor
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: TextDefaults.paragraphStyle
         ]
         guard hasSelection else {
             textView.typingAttributes = baseAttributes

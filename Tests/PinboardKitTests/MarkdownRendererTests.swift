@@ -70,6 +70,15 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(output.string, "first paragraph\nsecond paragraph")
     }
 
+    func testParagraphBoundariesStayVisuallyDistinctFromSoftBreaks() throws {
+        let output = render("first line\nstill first\n\nsecond paragraph")
+        let first = try XCTUnwrap(output.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+        let lastIndex = try XCTUnwrap(index(of: "second", in: output))
+        let last = try XCTUnwrap(output.attribute(.paragraphStyle, at: lastIndex, effectiveRange: nil) as? NSParagraphStyle)
+        XCTAssertGreaterThan(first.paragraphSpacing, 0, "a blank-line paragraph break needs a visible gap")
+        XCTAssertEqual(last.paragraphSpacing, 0, "the final block adds no trailing gap")
+    }
+
     func testSoftAndHardBreaksBecomeNewlines() {
         let output = render("soft\nbreak\n\nhard  \nbreak")
         XCTAssertTrue(output.string.contains("soft\nbreak"), "a soft break keeps its line")
