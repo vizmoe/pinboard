@@ -26,6 +26,9 @@ AppKit.
   selection behavior.
 - **Editable rich text**: Use the pencil to type, select, undo/redo; fonts, colors,
   backgrounds and paragraph styles survive import, editing and copy-out.
+  Text copied from web pages drops page-layout leftovers (container margins,
+  page backgrounds, near-black or near-white body colours) while keeping
+  emphasis, links and coloured text.
 - **Three text modes**, in order: **Rich Text Format**, **GitHub Flavored
   Markdown**, **Plain Text**. Rich Text Format preserves formatting; GFM uses
   cmark-gfm for headings, lists, aligned tables, task lists, strikethrough,

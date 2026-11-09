@@ -146,4 +146,114 @@ final class ClipboardReaderTests: XCTestCase {
     func testEmptyPasteboardReturnsNil() {
         XCTAssertNil(ClipboardReader.read(from: makePasteboard()))
     }
+
+    func testWebHTMLNormalizesHangingIndentsSerifItalicsContainerBackgroundAndCSSVariables() throws {
+        let html = """
+        <p style="margin-left: 92px; margin-right: 92px; text-indent: 0px; font-family: ui-serif, Georgia, serif; font-size: 19px; font-style: italic; color: rgb(238, 238, 238); background-color: rgb(17, 18, 19); -webkit-text-stroke-color: rgb(238, 238, 238);">
+            Elevator Down, Failed Breakdown, Short Squeeze. <strong>It applies in uptrends and downtrends.</strong>
+        </p>
+        <p style="margin-left: 92px; margin-right: 92px; text-indent: 0px; font-family: sans-serif; font-size: 19px; font-style: italic; color: var(--immersive-translate-theme, #20a162); background-color: rgb(17, 18, 19);">
+            电梯式下跌、失败下破、逼空。它适用于上升趋势和下降趋势。
+        </p>
+        """
+        let pasteboard = makePasteboard()
+        pasteboard.declareTypes([.html], owner: nil)
+        pasteboard.setString(html, forType: .html)
+
+        guard case .text(let text)? = ClipboardReader.read(from: pasteboard) else {
+            return XCTFail("expected rich text")
+        }
+
+        let nsString = text.string as NSString
+        let englishRange = nsString.range(of: "Elevator Down")
+        let boldEnglishRange = nsString.range(of: "It applies")
+        let chineseRange = nsString.range(of: "电梯式下跌")
+
+        // 1. Hanging indent and fixed right indent from container margins are cleared.
+        let paragraph = try XCTUnwrap(text.attribute(.paragraphStyle, at: englishRange.location, effectiveRange: nil) as? NSParagraphStyle)
+        XCTAssertEqual(paragraph.headIndent, 0)
+        XCTAssertEqual(paragraph.firstLineHeadIndent, 0)
+        XCTAssertEqual(paragraph.tailIndent, 0)
+
+        // 2. Serif italic and bold-italic are preserved on English runs.
+        let englishFont = try XCTUnwrap(text.attribute(.font, at: englishRange.location, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(englishFont.fontDescriptor.symbolicTraits.contains(.italic))
+        let boldEnglishFont = try XCTUnwrap(text.attribute(.font, at: boldEnglishRange.location, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(boldEnglishFont.fontDescriptor.symbolicTraits.contains(.bold))
+        XCTAssertTrue(boldEnglishFont.fontDescriptor.symbolicTraits.contains(.italic))
+
+        // 3. Chinese italic text receives obliqueness because PingFang SC has no italic face.
+        let chineseObliqueness = text.attribute(.obliqueness, at: chineseRange.location, effectiveRange: nil) as? CGFloat
+        XCTAssertGreaterThan(chineseObliqueness ?? 0, 0.1, "CJK italic text must slant via obliqueness")
+
+        // 4. Container dark background is stripped; neutral white text becomes labelColor;
+        //    translated text keeps its CSS var() fallback green colour.
+        XCTAssertNil(text.attribute(.backgroundColor, at: englishRange.location, effectiveRange: nil))
+        XCTAssertEqual(text.attribute(.foregroundColor, at: englishRange.location, effectiveRange: nil) as? NSColor, .labelColor)
+        let chineseColor = try XCTUnwrap(
+            (text.attribute(.foregroundColor, at: chineseRange.location, effectiveRange: nil) as? NSColor)?.usingColorSpace(.sRGB)
+        )
+        XCTAssertGreaterThan(chineseColor.greenComponent, chineseColor.redComponent + 0.2,
+                             "CSS var() fallback colour for translated text must survive")
+    }
+
+    func testHTMLStyleRewritesNeverTouchVisibleText() throws {
+        let visible = "Use margin-left: 92px; text-indent: 0px with var(--accent, red) and ui-serif."
+        let html = "<p style=\"margin-left: 92px; font-family: ui-serif\">\(visible)</p>"
+        let pasteboard = makePasteboard()
+        pasteboard.declareTypes([.html], owner: nil)
+        pasteboard.setString(html, forType: .html)
+
+        guard case .text(let text)? = ClipboardReader.read(from: pasteboard) else {
+            return XCTFail("expected rich text")
+        }
+        XCTAssertEqual(text.string.trimmingCharacters(in: .whitespacesAndNewlines), visible)
+        let paragraph = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(paragraph?.headIndent ?? 0, 0, "the inline container margin is still stripped")
+    }
+
+    func testNativeRTFKeepsIntentionalHangingIndent() throws {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.firstLineHeadIndent = 0
+        paragraph.headIndent = 36
+        let source = NSAttributedString(string: "Author, A. A Long Reference Title That Wraps.", attributes: [
+            .font: NSFont(name: "Helvetica", size: 13)!,
+            .paragraphStyle: paragraph
+        ])
+        let pasteboard = makePasteboard()
+        pasteboard.declareTypes([.rtf], owner: nil)
+        pasteboard.setData(source.rtfRepresentation()!, forType: .rtf)
+
+        guard case .text(let text)? = ClipboardReader.read(from: pasteboard) else {
+            return XCTFail("expected rich text")
+        }
+        let imported = try XCTUnwrap(text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+        XCTAssertEqual(imported.headIndent, 36, "bibliography-style hanging indents from native apps survive")
+    }
+
+    func testHTMLListItemsWithNestedDivAndParagraphWrappersDoNotEmitExtraBlankLineSeparators() throws {
+        let html = """
+        <meta charset='utf-8'><h2>二、从算法角度，自动切分其实有三个独立决策</h2><h3>1. 选择切分区域（Where to split）</h3><p>新窗口出现时，应该切分哪一块区域？</p><ul><li><div><div><p><span>Focused</span>：切分当前焦点窗口所在区域。</p></div></div></li><li><div><div><p><span>Largest</span>：切分面积最大的窗口区域。</p></div></div></li></ul>
+        """
+        let plain = """
+        二、从算法角度，自动切分其实有三个独立决策
+        1. 选择切分区域（Where to split）
+        新窗口出现时，应该切分哪一块区域？
+        - Focused：切分当前焦点窗口所在区域。
+        - Largest：切分面积最大的窗口区域。
+        """
+        let pasteboard = makePasteboard()
+        pasteboard.declareTypes([.html, .string], owner: nil)
+        pasteboard.setString(html, forType: .html)
+        pasteboard.setString(plain, forType: .string)
+
+        guard case .text(let text)? = ClipboardReader.read(from: pasteboard) else {
+            return XCTFail("expected rich text")
+        }
+        XCTAssertFalse(text.string.contains("\u{2028}"),
+                       "nested <div>/<p> wrappers inside <li> must not leave trailing U+2028 blank lines")
+        XCTAssertFalse(text.string.hasSuffix("\n"),
+                       "synthetic trailing block newline from </ul> must be trimmed when plain counterpart has none")
+        XCTAssertEqual(text.string.components(separatedBy: "\n").count, 5)
+    }
 }
