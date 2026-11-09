@@ -18,8 +18,8 @@ AppKit.
   eye and close icons in the strip act on all pins; those inside a card act on
   that pin. Closing a pin keeps its saved history. Empty Pins shows only the
   strip. Hover an action for its name; every icon also has an accessibility
-  label. Click outside, press Escape or click the status icon again to dismiss
-  the panel.
+  label. Click a card to show that pin; `⌘F` jumps to History search. Click
+  outside, press Escape or click the status icon again to dismiss the panel.
 - **Quick actions**: New pins appear at the pointer, clamped to the screen.
   Double-click an idle pin to copy its content and close it. Use the pencil or
   context menu to edit; double-click within an active editor keeps its normal
@@ -57,6 +57,8 @@ AppKit.
 - **Pin history**: Every pin is recorded locally (latest edited state,
   including editable annotation data). Open History in the menu bar panel to
   search, preview, pin again, copy or delete an entry without leaving the panel.
+  In an entry's preview, Return pins it again, Delete removes it and Escape
+  goes back to the list.
   Clear History reveals cancel and red trash icons for confirmation and keeps
   records associated with open pins. Retention is configurable in Settings.
 - **Transparent text pins**: Text floats directly over the desktop; only
@@ -98,6 +100,9 @@ Notes:
 - `toggle` hides everything when at least one pin is visible, otherwise
   shows all hidden pins; with no pins it does nothing.
 - Unknown commands are ignored safely.
+- `open -a Pinboard note.md` pins a file: Markdown (`.md`, `.markdown`) opens
+  as a Markdown pin, RTF/RTFD as rich text, images as image pins and other
+  UTF-8 text as a text pin.
 - Commands do not steal keyboard focus from the app you're using.
 - The status panel provides pin creation and individual or bulk Show/Hide/Close
   controls through the same window manager. `toggle` remains available via URL.
