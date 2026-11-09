@@ -29,30 +29,32 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Pins") {
+            Section {
                 Toggle("Place new pins at the pointer", isOn: $preferences.placeNewWindowAtMouse)
-                Text("Double-click a pin to copy and close it. Use the pencil or context menu to edit.")
+            } header: {
+                Text("Pins")
+            } footer: {
+                Text("Double-click an idle pin to copy and close it. Use the pencil or context menu to edit.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Text") {
+            Section {
                 Picker("Text mode", selection: $preferences.textMode) {
                     ForEach(TextContentMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
-                Text("Rich Text Format preserves fonts and colours. GitHub Flavored Markdown renders tables, task lists, links and images; use the pencil to edit its source. Plain Text uses the default font.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
                 Picker("Markdown theme", selection: $preferences.markdownTheme) {
                     ForEach(MarkdownTheme.allCases) { theme in
                         Text(theme.title).tag(theme)
                     }
                 }
                 MarkdownThemePreview(theme: preferences.markdownTheme)
-                Text("The theme colours Markdown pins and their paper. A pin switched to a transparent background keeps it.")
+            } header: {
+                Text("Text")
+            } footer: {
+                Text("A text mode chosen from a pin's context menu overrides this default for that pin.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -112,7 +114,7 @@ private struct MarkdownThemePreview: View {
                     .font(.system(size: 11, design: .monospaced))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
-                    .background(RoundedRectangle(cornerRadius: 3).fill(Color(nsColor: theme.codeBackground)))
+                    .background(RoundedRectangle(cornerRadius: 2).fill(Color(nsColor: theme.codeBackground)))
             }
             .font(.system(size: 12))
             .foregroundColor(Color(nsColor: theme.text))
@@ -123,12 +125,12 @@ private struct MarkdownThemePreview: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 5)
                 .fill(Color(nsColor: theme.background ?? .textBackgroundColor))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(Color(nsColor: .separatorColor))
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6))
         )
     }
 }

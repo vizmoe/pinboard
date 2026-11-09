@@ -3,10 +3,16 @@ import AppKit
 /// The status item opens one popover for pins and history. Actions resolve current
 /// identities through the manager, including buttons retained after a close.
 final class MenuBarController: NSObject, NSPopoverDelegate {
+    enum Page: Equatable {
+        case pins
+        case history
+    }
+
     let statusItem: NSStatusItem
     let popover = NSPopover()
     let pinsViewController: PinsPanelViewController
     private(set) var historyViewController: HistoryPanelViewController?
+    private(set) var activePage: Page = .pins
     private let manager: PinWindowManager
     private var refreshScheduled = false
     private let onOpenSettings: () -> Void
@@ -28,7 +34,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         button?.image?.isTemplate = true
         button?.target = self
         button?.action = #selector(togglePanel(_:))
-        button?.setAccessibilityLabel("Pinboard — Pins")
+        button?.setAccessibilityLabel("Pinboard")
 
         popover.behavior = .transient
         popover.animates = false
@@ -46,10 +52,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
-    private var isShowingHistory: Bool {
-        if let historyViewController { return popover.contentViewController === historyViewController }
-        return false
-    }
+    private var isShowingHistory: Bool { activePage == .history }
 
     @objc func togglePanel(_ sender: Any?) {
         if popover.isShown {
@@ -64,6 +67,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let view = popover.contentViewController?.view
         view?.window?.makeKey()
         if isShowingHistory {
+            historyViewController?.isPageActive = true
             historyViewController?.focusSearch()
         } else {
             view?.window?.makeFirstResponder(view)
@@ -75,15 +79,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private func refreshActivePage() {
-        if isShowingHistory {
+        switch activePage {
+        case .history:
             showHistory()
-        } else {
+        case .pins:
             pinsViewController.reloadPins()
             syncPopoverSize(for: pinsViewController)
         }
     }
 
     private func showHistory() {
+        activePage = .history
         manager.flushAllHistorySyncs()
         if historyViewController == nil || historyViewController?.model?.store !== manager.historyStore {
             let model = manager.historyStore.map {
@@ -92,6 +98,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             let history = HistoryPanelViewController(model: model)
             history.onBack = { [weak self, weak history] in
                 guard let self else { return }
+                self.activePage = .pins
                 history?.isPageActive = false
                 self.popover.contentViewController = self.pinsViewController
                 self.pinsViewController.reloadPins()

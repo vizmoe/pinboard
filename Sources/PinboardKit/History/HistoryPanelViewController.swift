@@ -3,6 +3,14 @@ import AppKit
 /// History navigation stays inside the status popover. The store remains the
 /// source of truth, including when a selected record disappears during an edit.
 final class HistoryPanelViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+    /// Explicit view state of the history panel so list browsing, record detail
+    /// inspection, and destructive clear confirmation are mutually exclusive.
+    enum ViewState: Equatable {
+        case list
+        case detail(HistoryRecord, isReadable: Bool)
+        case confirmingClear
+    }
+
     let model: HistoryViewModel?
     var onBack: (() -> Void)?
     var onDismiss: (() -> Void)?
@@ -24,7 +32,8 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
     }()
     let detailImageView = NSImageView()
     private(set) var records: [HistoryRecord] = []
-    private(set) var isConfirmingClear = false
+    private(set) var viewState: ViewState = .list
+    var isConfirmingClear: Bool { viewState == .confirmingClear }
     private let toolbar = MenuBarPanelToolbar(showingHistory: true)
     private let errorIcon = NSImageView()
     private var detailButtons: [NSButton] = []
@@ -49,13 +58,13 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
     override func loadView() {
         let root = MenuBarPanelRootView(frame: NSRect(x: 0, y: 0, width: 320, height: 78))
         root.onLayout = { [weak self] in self?.layoutContent() }
-        root.onDismiss = { [weak self] in self?.onDismiss?() }
+        root.onDismiss = { [weak self] in self?.handleCancelOperation() }
         view = root
         preferredContentSize = root.frame.size
         toolbar.onPins = { [weak self] in self?.onBack?() }
         toolbar.onHistory = { [weak self] in
             self?.model?.selection = nil
-            self?.isConfirmingClear = false
+            self?.viewState = .list
             self?.reloadHistory()
             self?.focusSearch()
         }
@@ -119,6 +128,9 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         confirmationButtons = [cancel, confirm]
         [toolbar, searchField, scrollView, detailScrollView, errorIcon].forEach { root.addSubview($0) }
         root.onAppearanceChange = { [weak self] in self?.reloadHistory() }
+        root.onKeyEquivalent = { [weak self] event in
+            self?.handleKeyEquivalent(event) ?? false
+        }
     }
 
     private func layoutContent() {
@@ -144,7 +156,7 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
     override func viewWillAppear() { super.viewWillAppear(); reloadHistory() }
 
     func focusSearch() {
-        view.window?.makeFirstResponder(model?.selection == nil && !isConfirmingClear ? searchField : view)
+        view.window?.makeFirstResponder(viewState == .list ? searchField : view)
     }
 
     func reloadHistory() {
@@ -158,23 +170,45 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         if searchField.stringValue != (model?.searchText ?? "") { searchField.stringValue = model?.searchText ?? "" }
         tableView.reloadData()
         tableView.deselectAll(nil)
-        let detail = model?.record(for: model?.selection)
-        let showingList = detail == nil && !isConfirmingClear
+
+        if viewState == .confirmingClear {
+            detailScrollView.isHidden = true
+            errorIcon.isHidden = true
+        } else if let detail = model?.record(for: model?.selection) {
+            detailScrollView.isHidden = false
+            errorIcon.isHidden = true
+            view.effectiveAppearance.performAsCurrentDrawingAppearance { showDetail(detail) }
+            viewState = .detail(detail, isReadable: errorIcon.isHidden)
+        } else {
+            viewState = .list
+            detailScrollView.isHidden = true
+            errorIcon.isHidden = true
+        }
+
+        let showingList = viewState == .list
         view.setAccessibilityLabel(isConfirmingClear ? "Confirm clearing history" : "History: \(records.count) saved items")
-        toolbar.setActions(isConfirmingClear ? confirmationButtons : detail != nil ? detailButtons : [clearButton])
+        switch viewState {
+        case .confirmingClear:
+            toolbar.setActions(confirmationButtons)
+        case .detail:
+            toolbar.setActions(detailButtons)
+        case .list:
+            toolbar.setActions([clearButton])
+        }
         searchField.isHidden = !showingList
         clearButton.isEnabled = !(model?.records.isEmpty ?? true)
         scrollView.isHidden = !showingList || records.isEmpty
-        detailScrollView.isHidden = detail == nil || isConfirmingClear
-        errorIcon.isHidden = true
-        if let detail, !isConfirmingClear {
-            view.effectiveAppearance.performAsCurrentDrawingAppearance { showDetail(detail) }
-        }
+
         listHeight = min(CGFloat(records.count) * 52 - (records.isEmpty ? 0 : 4), 308)
         let height: CGFloat
-        if isConfirmingClear { height = 46 }
-        else if detail != nil { height = errorIcon.isHidden ? 54 + detailHeight : 78 }
-        else { height = 78 + listHeight + (records.isEmpty ? 0 : 8) }
+        switch viewState {
+        case .confirmingClear:
+            height = 46
+        case .detail(_, let isReadable):
+            height = isReadable ? 54 + detailHeight : 78
+        case .list:
+            height = 78 + listHeight + (records.isEmpty ? 0 : 8)
+        }
         let size = NSSize(width: 320, height: height)
         preferredContentSize = size
         // The popover owns attached view frames; changing one creates stale margins.
@@ -279,10 +313,44 @@ final class HistoryPanelViewController: NSViewController, NSTableViewDataSource,
         return button
     }
 
-    @objc private func back() { model?.selection = nil; reloadHistory(); focusSearch() }
-    @objc private func requestClear() { isConfirmingClear = true; reloadHistory(); view.window?.makeFirstResponder(view) }
-    @objc private func cancelClear() { isConfirmingClear = false; reloadHistory(); focusSearch() }
-    @objc private func confirmClear() { isConfirmingClear = false; model?.clearAll(); reloadHistory(); focusSearch() }
+    func handleCancelOperation() {
+        switch viewState {
+        case .confirmingClear:
+            cancelClear()
+        case .detail:
+            back()
+        case .list:
+            onDismiss?()
+        }
+    }
+
+    func handleKeyEquivalent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "f" {
+            if viewState != .list {
+                back()
+            } else {
+                focusSearch()
+            }
+            return true
+        }
+        guard model?.selection != nil else { return false }
+        if flags.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            pinAgain()
+            return true
+        }
+        if (flags == .command && event.keyCode == 51)
+            || (flags.isEmpty && (event.keyCode == 51 || event.keyCode == 117)) {
+            deleteRecord()
+            return true
+        }
+        return false
+    }
+
+    @objc private func back() { model?.selection = nil; viewState = .list; reloadHistory(); focusSearch() }
+    @objc func requestClear() { viewState = .confirmingClear; reloadHistory(); view.window?.makeFirstResponder(view) }
+    @objc private func cancelClear() { viewState = .list; reloadHistory(); focusSearch() }
+    @objc private func confirmClear() { viewState = .list; model?.clearAll(); reloadHistory(); focusSearch() }
     @objc private func pinAgain() { if let id = model?.selection { model?.pinAgain(id) } }
     @objc private func copyRecord() { if let id = model?.selection { model?.copy(id) } }
     @objc private func deleteRecord() { if let id = model?.selection { model?.delete(id); reloadHistory(); focusSearch() } }
@@ -298,8 +366,11 @@ final class HistoryRowView: NSTableCellView {
         titleLabel.font = .systemFont(ofSize: 12)
         titleLabel.lineBreakMode = .byTruncatingTail
         previewView.imageScaling = .scaleProportionallyUpOrDown
+        previewView.wantsLayer = true
+        previewView.layer?.cornerRadius = 3
+        previewView.layer?.masksToBounds = true
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 6
         chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 9, weight: .regular))
         chevron.contentTintColor = .tertiaryLabelColor

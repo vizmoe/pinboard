@@ -8,6 +8,8 @@ enum AppMenu {
         main.addItem(submenu(title: "Pinboard") { menu in
             add(menu, "About Pinboard", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
             menu.addItem(.separator())
+            add(menu, "Settings…", #selector(AppDelegate.openSettings(_:)), ",")
+            menu.addItem(.separator())
             add(menu, "Hide All Pins", #selector(AppDelegate.hideAllPins(_:)))
             menu.addItem(.separator())
             add(menu, "Quit Pinboard", #selector(NSApplication.terminate(_:)), "q")

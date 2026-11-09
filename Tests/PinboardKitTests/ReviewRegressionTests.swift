@@ -216,4 +216,131 @@ final class ReviewRegressionTests: XCTestCase {
                                  "RTFD attachments restored from history must fit the pin's wrap width")
         XCTAssertGreaterThan(restoredAttachment.bounds.width, 100)
     }
+
+    func testHistoryEscapeStepsBackOneLevelBeforeDismissing() throws {
+        let manager = PinWindowManager.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = HistoryStore(directory: directory)
+        manager.historyStore = store
+        defer {
+            manager.closeAll()
+            manager.historyStore = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let pin = manager.createPin(content: .text(NSAttributedString(string: "History navigation")))
+        let recordID = try XCTUnwrap(pin.historyRecordID)
+
+        let viewModel = HistoryViewModel(store: store, manager: manager)
+        let historyVC = HistoryPanelViewController(model: viewModel)
+        var dismissed = false
+        historyVC.onDismiss = { dismissed = true }
+        _ = historyVC.view
+        XCTAssertEqual(historyVC.viewState, .list)
+        historyVC.requestClear()
+        XCTAssertEqual(historyVC.viewState, .confirmingClear)
+        historyVC.handleCancelOperation()
+        XCTAssertEqual(historyVC.viewState, .list, "Esc in .confirmingClear must cancel confirmation without dismissing popover")
+        XCTAssertFalse(dismissed)
+
+        viewModel.selection = recordID
+        historyVC.reloadHistory()
+        if case .detail(let record, let isReadable) = historyVC.viewState {
+            XCTAssertEqual(record.id, recordID)
+            XCTAssertTrue(isReadable)
+        } else {
+            XCTFail("Expected .detail viewState when a record is selected")
+        }
+        historyVC.handleCancelOperation()
+        XCTAssertEqual(historyVC.viewState, .list, "Esc in .detail must return to .list without dismissing popover")
+        XCTAssertFalse(dismissed)
+
+        historyVC.handleCancelOperation()
+        XCTAssertTrue(dismissed, "Esc in .list must dismiss the popover")
+    }
+
+    func testNativeFeelConventions() throws {
+        let manager = PinWindowManager.shared
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("PinboardNativeFeel-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer {
+            manager.closeAll()
+            manager.historyStore = nil
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let store = HistoryStore(directory: dir)
+        manager.historyStore = store
+
+        // 1. Popover root view preserves native NSPopover vibrancy (isOpaque == false)
+        let rootView = MenuBarPanelRootView(frame: NSRect(x: 0, y: 0, width: 320, height: 100))
+        XCTAssertFalse(rootView.isOpaque, "MenuBarPanelRootView must not paint an opaque background over NSPopover vibrancy")
+
+        // 2. AppMenu includes standard ⌘, Settings item and SettingsWindowController persists frame
+        AppMenu.install()
+        let appSubmenu = try XCTUnwrap(NSApp.mainMenu?.items.first?.submenu)
+        let settingsItem = appSubmenu.items.first { $0.keyEquivalent == "," }
+        XCTAssertNotNil(settingsItem, "App menu must expose ⌘, for Settings…")
+        let settingsWC = SettingsWindowController()
+        settingsWC.show()
+        XCTAssertEqual(settingsWC.window?.frameAutosaveName, "PinboardSettingsWindow")
+        settingsWC.window?.close()
+
+        // 3. Toast clamps its frame within the active screen's visibleFrame
+        let screenBounds = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let clampedTopRight = Toast.clampedFrame(
+            size: NSSize(width: 200, height: 36),
+            around: NSPoint(x: 1435, y: 895),
+            in: screenBounds
+        )
+        XCTAssertTrue(screenBounds.insetBy(dx: 8, dy: 8).contains(clampedTopRight),
+                      "Toast frame near screen corner must be clamped inside the visibleFrame")
+
+        // 4. Keyboard navigation in Pins & History panels (⌘F, Return, Delete) + direct row click
+        let pinsVC = PinsPanelViewController(manager: manager)
+        var switchedToHistory = false
+        pinsVC.onUtilityAction = { if $0 == .history { switchedToHistory = true } }
+        _ = pinsVC.view
+        let cmdF = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "f", charactersIgnoringModifiers: "f",
+            isARepeat: false, keyCode: 3
+        ))
+        XCTAssertTrue(pinsVC.view.performKeyEquivalent(with: cmdF))
+        XCTAssertTrue(switchedToHistory, "⌘F in Pins panel must switch to History search")
+
+        let hiddenPin = manager.createPin(content: .text(NSAttributedString(string: "Click row to present")))
+        hiddenPin.hidePin()
+        XCTAssertFalse(hiddenPin.isPinVisible)
+        pinsVC.reloadPins()
+        let rowView = try XCTUnwrap(pinsVC.rows.first)
+        let rowClick = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: NSPoint(x: 20, y: 20), modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        rowView.mouseDown(with: rowClick)
+        XCTAssertTrue(hiddenPin.isPinVisible, "Clicking a PinRowView body outside action buttons must present the pin")
+
+        let recordID = try XCTUnwrap(hiddenPin.historyRecordID)
+        let viewModel = HistoryViewModel(store: store, manager: manager)
+        let historyVC = HistoryPanelViewController(model: viewModel)
+        _ = historyVC.view
+        viewModel.selection = recordID
+        historyVC.reloadHistory()
+        let returnKey = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+            isARepeat: false, keyCode: 36
+        ))
+        XCTAssertTrue(historyVC.handleKeyEquivalent(returnKey), "Return in History detail must re-pin the selected record")
+        XCTAssertEqual(manager.count, 2)
+
+        XCTAssertTrue(historyVC.handleKeyEquivalent(cmdF), "⌘F in History detail must return to list search")
+        XCTAssertEqual(historyVC.viewState, .list)
+
+        // 5. URLCommandRouter opens local Markdown and image file URLs as pins
+        let mdFile = dir.appendingPathComponent("note.md")
+        try "# Native File Open\nHello world".write(to: mdFile, atomically: true, encoding: .utf8)
+        XCTAssertTrue(URLCommandRouter.handle(mdFile, manager: manager))
+        XCTAssertEqual(manager.count, 3)
+        XCTAssertEqual((manager.pins.last?.contentView as? TextPinView)?.textMode, .markdown)
+    }
 }
