@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 final class SettingsWindowController: NSObject, NSWindowDelegate {
-    private var window: NSWindow?
+    private(set) var window: NSWindow?
 
     func show() {
         if window == nil {
@@ -13,6 +13,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.center()
+            window.setFrameAutosaveName("PinboardSettingsWindow")
             self.window = window
         }
         window?.makeKeyAndOrderFront(nil)

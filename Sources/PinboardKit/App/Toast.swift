@@ -21,7 +21,8 @@ enum Toast {
         background.blendingMode = .behindWindow
         background.state = .active
         background.wantsLayer = true
-        background.layer?.cornerRadius = 9
+        background.layer?.cornerRadius = 8
+        background.layer?.cornerCurve = .continuous
         background.layer?.masksToBounds = true
         background.addSubview(label)
         NSLayoutConstraint.activate([
@@ -33,7 +34,9 @@ enum Toast {
 
         let size = background.fittingSize
         let mouse = NSEvent.mouseLocation
-        let frame = NSRect(x: mouse.x - size.width / 2, y: mouse.y + 18, width: size.width, height: size.height)
+        let screenFrame = (NSScreen.underMouse ?? NSScreen.main)?.visibleFrame
+        let frame = clampedFrame(size: size, around: mouse, in: screenFrame)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
         let window = NSPanel(
             contentRect: frame,
@@ -48,15 +51,22 @@ enum Toast {
         window.ignoresMouseEvents = true
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.contentView = background
-        window.alphaValue = 0
+        window.alphaValue = reduceMotion ? 1 : 0
         window.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.1
-            window.animator().alphaValue = 1
+        if !reduceMotion {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.1
+                window.animator().alphaValue = 1
+            }
         }
         panel = window
 
         let work = DispatchWorkItem {
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                window.orderOut(nil)
+                if panel === window { panel = nil }
+                return
+            }
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.25
                 window.animator().alphaValue = 0
@@ -67,5 +77,16 @@ enum Toast {
         }
         dismissWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+    }
+
+    static func clampedFrame(size: NSSize, around point: NSPoint, in screenFrame: NSRect?) -> NSRect {
+        var frame = NSRect(x: point.x - size.width / 2, y: point.y + 18, width: size.width, height: size.height)
+        guard let bounds = screenFrame?.insetBy(dx: 8, dy: 8),
+              bounds.width >= size.width, bounds.height >= size.height else {
+            return frame
+        }
+        frame.origin.x = min(max(frame.origin.x, bounds.minX), bounds.maxX - size.width)
+        frame.origin.y = min(max(frame.origin.y, bounds.minY), bounds.maxY - size.height)
+        return frame
     }
 }

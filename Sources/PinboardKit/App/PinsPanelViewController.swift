@@ -55,6 +55,14 @@ final class PinsPanelViewController: NSViewController {
 
         [toolbar, scrollView].forEach { root.addSubview($0) }
         root.onAppearanceChange = { [weak self] in self?.reloadPins() }
+        root.onKeyEquivalent = { [weak self] event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "f" {
+                self?.onUtilityAction?(.history)
+                return true
+            }
+            return false
+        }
     }
 
     private func layoutContent() {
@@ -152,10 +160,10 @@ final class PinRowView: NSView {
         self.onAction = onAction
         super.init(frame: NSRect(x: 0, y: 0, width: 304, height: 60))
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 6
         previewView.imageScaling = .scaleProportionallyUpOrDown
         previewView.wantsLayer = true
-        previewView.layer?.cornerRadius = 4
+        previewView.layer?.cornerRadius = 3
         previewView.layer?.masksToBounds = true
         titleLabel.font = .systemFont(ofSize: 12)
         titleLabel.maximumNumberOfLines = 2
@@ -208,4 +216,14 @@ final class PinRowView: NSView {
     @objc private func show() { onAction(.show, pinID) }
     @objc private func hide() { onAction(.hide, pinID) }
     @objc private func close() { onAction(.close, pinID) }
+
+    override func mouseDown(with event: NSEvent) {
+        let local = convert(event.locationInWindow, from: nil)
+        let hitButton = [showButton, hideButton, closeButton].contains { $0.frame.contains(local) }
+        if !hitButton {
+            onAction(.show, pinID)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
 }

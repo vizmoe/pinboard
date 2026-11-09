@@ -67,7 +67,7 @@ final class PanelIconButton: NSButton {
                 : selected ? .controlAccentColor.withAlphaComponent(0.14)
                 : .labelColor.withAlphaComponent(isHighlighted ? 0.12 : 0.07)
             color.withAlphaComponent(isEnabled ? color.alphaComponent : 0.25).setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6).fill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 4, yRadius: 4).fill()
         }
         contentTintColor = isProminent ? .white : isDestructive ? .systemRed
             : selected ? .controlAccentColor : .secondaryLabelColor
@@ -143,11 +143,17 @@ final class MenuBarPanelRootView: NSView {
     var onLayout: (() -> Void)?
     var onDismiss: (() -> Void)?
     var onAppearanceChange: (() -> Void)?
+    var onKeyEquivalent: ((NSEvent) -> Bool)?
     override var isFlipped: Bool { true }
-    override var isOpaque: Bool { true }
     override var acceptsFirstResponder: Bool { true }
-    override func draw(_ dirtyRect: NSRect) { NSColor.windowBackgroundColor.setFill(); dirtyRect.fill() }
-    override func keyDown(with event: NSEvent) { interpretKeyEvents([event]) }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if onKeyEquivalent?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+    override func keyDown(with event: NSEvent) {
+        if onKeyEquivalent?(event) == true { return }
+        interpretKeyEvents([event])
+    }
     override func cancelOperation(_ sender: Any?) { onDismiss?() }
     override func insertTab(_ sender: Any?) { window?.selectNextKeyView(sender) }
     override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(sender) }

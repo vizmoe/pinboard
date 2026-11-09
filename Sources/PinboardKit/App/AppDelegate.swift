@@ -68,12 +68,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu actions
 
+    @objc func openSettings(_ sender: Any?) {
+        showSettings()
+    }
+
     @objc func hideAllPins(_ sender: Any?) {
         manager.hideAll()
     }
 
     @objc func closeFocusedPin(_ sender: Any?) {
-        focusedPin()?.closePin()
+        if let pin = focusedPin() {
+            pin.closePin()
+        } else {
+            NSApp.keyWindow?.performClose(sender)
+        }
     }
 
     @objc func hideFocusedPin(_ sender: Any?) {
