@@ -113,7 +113,9 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
     init(attributedString: NSAttributedString, mode: TextContentMode = .richText, hasExplicitMode: Bool = false) {
         textMode = mode
         hasExplicitTextMode = hasExplicitMode
-        sourceText = attributedString.string
+        sourceText = mode == .markdown
+            ? Self.markdownSource(from: attributedString)
+            : attributedString.string
         // Explicit TextKit 1 stack: TextKit 2 lays out through the display
         // cycle, which is skipped while the run loop sits in event-tracking
         // mode — exactly when a live window resize needs to re-wrap.
@@ -322,10 +324,106 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
                 ? MarkdownRenderer.render(content.string)
                 : NSAttributedString(string: content.string,
                                      attributes: ClipboardReader.defaultTextAttributes())
-        case .plainText, .markdown:
+        case .plainText:
             return NSAttributedString(string: content.string,
                                       attributes: ClipboardReader.defaultTextAttributes())
+        case .markdown:
+            return NSAttributedString(string: markdownSource(from: content),
+                                      attributes: ClipboardReader.defaultTextAttributes())
         }
+    }
+
+    /// Extracts a Markdown source string from `attributed`, converting rich
+    /// `.link` attribute runs into `[label](url)` syntax so hyperlinks from
+    /// pasted RTF/HTML survive when pins are created in or switched to Markdown.
+    static func markdownSource(from attributed: NSAttributedString) -> String {
+        guard attributed.length > 0 else { return "" }
+        let fullRange = NSRange(location: 0, length: attributed.length)
+        var hasLinks = false
+        attributed.enumerateAttribute(.link, in: fullRange, options: []) { value, _, stop in
+            if linkDestination(from: value) != nil {
+                hasLinks = true
+                stop.pointee = true
+            }
+        }
+        guard hasLinks else { return attributed.string }
+
+        let nsString = attributed.string as NSString
+        var output = ""
+        attributed.enumerateAttribute(.link, in: fullRange, options: []) { value, range, _ in
+            let segment = nsString.substring(with: range)
+            guard let destination = linkDestination(from: value) else {
+                output.append(segment)
+                return
+            }
+            let trimmed = splitSurroundingWhitespace(segment)
+            let core = trimmed.core
+            guard !core.isEmpty, core != "\u{FFFC}" else {
+                output.append(segment)
+                return
+            }
+            if core == destination || destination == "mailto:\(core)" {
+                output.append(segment)
+                return
+            }
+            let formattedDestination = formatMarkdownDestination(destination)
+            output.append("\(trimmed.leading)[\(core)](\(formattedDestination))\(trimmed.trailing)")
+        }
+        return output
+    }
+
+    private static func linkDestination(from value: Any?) -> String? {
+        if let url = value as? URL, !url.absoluteString.isEmpty {
+            return url.absoluteString
+        }
+        if let str = value as? String, !str.isEmpty {
+            return str
+        }
+        return nil
+    }
+
+    private static func splitSurroundingWhitespace(_ text: String) -> (leading: String, core: String, trailing: String) {
+        let scalars = text.unicodeScalars
+        let ws = CharacterSet.whitespacesAndNewlines
+        var start = scalars.startIndex
+        while start < scalars.endIndex, ws.contains(scalars[start]) {
+            start = scalars.index(after: start)
+        }
+        var end = scalars.endIndex
+        while end > start {
+            let prev = scalars.index(before: end)
+            if ws.contains(scalars[prev]) {
+                end = prev
+            } else {
+                break
+            }
+        }
+        return (
+            leading: String(scalars[scalars.startIndex..<start]),
+            core: String(scalars[start..<end]),
+            trailing: String(scalars[end..<scalars.endIndex])
+        )
+    }
+
+    private static func formatMarkdownDestination(_ urlString: String) -> String {
+        let hasWhitespace = urlString.unicodeScalars.contains {
+            CharacterSet.whitespacesAndNewlines.contains($0)
+        }
+        var depth = 0
+        var balancedParens = true
+        for ch in urlString {
+            if ch == "(" {
+                depth += 1
+            } else if ch == ")" {
+                depth -= 1
+                if depth < 0 {
+                    balancedParens = false
+                    break
+                }
+            }
+        }
+        if depth != 0 { balancedParens = false }
+        return (hasWhitespace || !balancedParens) ? "<\(urlString)>" : urlString
     }
 
     /// Applies the global default; a pin the user switched individually keeps
@@ -353,7 +451,7 @@ final class TextPinView: NSView, PinContentDisplaying, NSTextViewDelegate {
             )
             textView.typingAttributes = ClipboardReader.defaultTextAttributes()
         case .markdown:
-            sourceText = attributed.string
+            sourceText = Self.markdownSource(from: attributed)
             textView.textStorage?.setAttributedString(
                 MarkdownRenderer.render(sourceText, style: .init(theme: markdownTheme))
             )

@@ -100,6 +100,75 @@ enum TextDefaults {
         return resolved
     }
 
+    /// Normalizes all dot-prefixed system fonts in `attributed` to concrete
+    /// font families so editors and toolbars never expose `.AppleSystemUIFont`,
+    /// and ensures italic runs keep visual slant even when resolved to or
+    /// falling back to CJK faces (`PingFang SC`) that lack an italic member.
+    static func normalizingSystemFonts(in attributed: NSAttributedString) -> NSAttributedString {
+        guard attributed.length > 0 else { return attributed }
+        let mutable = NSMutableAttributedString(attributedString: attributed)
+        let fullRange = NSRange(location: 0, length: mutable.length)
+        let nsString = mutable.string as NSString
+        mutable.enumerateAttribute(.font, in: fullRange, options: []) { value, range, _ in
+            guard let font = value as? NSFont else {
+                mutable.addAttribute(.font, value: Self.font, range: range)
+                return
+            }
+            let wasItalic = font.fontDescriptor.symbolicTraits.contains(.italic)
+                || font.fontName.localizedCaseInsensitiveContains("italic")
+                || font.fontName.localizedCaseInsensitiveContains("oblique")
+            let concrete = concreteFont(for: font)
+            if concrete !== font {
+                mutable.addAttribute(.font, value: concrete, range: range)
+            }
+            guard wasItalic else { return }
+            let resolvedIsItalic = concrete.fontDescriptor.symbolicTraits.contains(.italic)
+            if !resolvedIsItalic {
+                mutable.addAttribute(.obliqueness, value: CGFloat(0.16), range: range)
+            } else {
+                // Latin italic fonts (e.g. Georgia-Italic, Times-Italic) fall
+                // back to upright PingFang SC for CJK glyphs without applying
+                // slant; split CJK subranges so Chinese italic text slants too.
+                let isBold = concrete.fontDescriptor.symbolicTraits.contains(.bold)
+                var cjkFont = Self.font.withSize(concrete.pointSize)
+                if isBold {
+                    cjkFont = NSFontManager.shared.convert(cjkFont, toHaveTrait: .boldFontMask)
+                }
+                for cjkRange in cjkSubranges(in: nsString, range: range) {
+                    mutable.addAttribute(.font, value: cjkFont, range: cjkRange)
+                    mutable.addAttribute(.obliqueness, value: CGFloat(0.16), range: cjkRange)
+                }
+            }
+        }
+        return mutable
+    }
+
+    private static func cjkSubranges(in string: NSString, range: NSRange) -> [NSRange] {
+        let substring = string.substring(with: range)
+        var ranges: [NSRange] = []
+        var utf16Offset = range.location
+        var currentStart: Int?
+        for scalar in substring.unicodeScalars {
+            let isCJK = (0x2E80...0x9FFF).contains(scalar.value)
+                || (0x3000...0x303F).contains(scalar.value)
+                || (0xF900...0xFAFF).contains(scalar.value)
+                || (0xFE30...0xFE4F).contains(scalar.value)
+                || (0xFF00...0xFFEF).contains(scalar.value)
+                || (0x20000...0x2FA1F).contains(scalar.value)
+            if isCJK {
+                if currentStart == nil { currentStart = utf16Offset }
+            } else if let start = currentStart {
+                ranges.append(NSRange(location: start, length: utf16Offset - start))
+                currentStart = nil
+            }
+            utf16Offset += scalar.utf16.count
+        }
+        if let start = currentStart {
+            ranges.append(NSRange(location: start, length: utf16Offset - start))
+        }
+        return ranges
+    }
+
     /// Shared paragraph style across Rich Text, Plain Text and Markdown body
     /// text so unstyled text has identical line height and layout in every mode.
     static var paragraphStyle: NSParagraphStyle {

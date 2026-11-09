@@ -166,6 +166,61 @@ final class MarkdownPinTests: XCTestCase {
         XCTAssertNotNil(pasteboard.data(forType: .rtf))
         XCTAssertEqual(pasteboard.string(forType: .string), "plain")
     }
+
+    func testSwitchingRichTextWithHyperlinksToMarkdownPreservesLinkURLs() throws {
+        let rich = NSMutableAttributedString(
+            string: "Download from GitHub Releases or read Installation.",
+            attributes: ClipboardReader.defaultTextAttributes()
+        )
+        let releasesRange = (rich.string as NSString).range(of: "GitHub Releases")
+        let installRange = (rich.string as NSString).range(of: "Installation")
+        rich.addAttribute(.link, value: URL(string: "https://github.com/example/releases")!, range: releasesRange)
+        rich.addAttribute(.link, value: "https://example.com/docs/install", range: installRange)
+
+        let pin = manager.createPin(content: .text(rich), textMode: .richText)
+        let view = try XCTUnwrap(pin.contentView as? TextPinView)
+
+        view.setTextMode(.markdown, explicit: true)
+        XCTAssertEqual(
+            try text(of: view),
+            "Download from [GitHub Releases](https://github.com/example/releases) or read [Installation](https://example.com/docs/install)."
+        )
+
+        let rendered = view.renderedAttributedString
+        XCTAssertEqual(rendered.string, "Download from GitHub Releases or read Installation.")
+        let renderedReleases = (rendered.string as NSString).range(of: "GitHub Releases")
+        let renderedInstall = (rendered.string as NSString).range(of: "Installation")
+        XCTAssertEqual(
+            rendered.attribute(.link, at: renderedReleases.location, effectiveRange: nil) as? String,
+            "https://github.com/example/releases"
+        )
+        XCTAssertEqual(
+            rendered.attribute(.link, at: renderedInstall.location, effectiveRange: nil) as? String,
+            "https://example.com/docs/install"
+        )
+    }
+
+    func testPastingHTMLWithHyperlinksAndSwitchingToMarkdownKeepsLinksClean() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("pinboard.markdown.html-links"))
+        pasteboard.clearContents()
+        let html = """
+        <p>Download from <a href="https://github.com/example/releases">GitHub Releases</a> and keep its helper.</p>
+        <p>Covered in <a href="https://example.com/install">Installation</a>.</p>
+        """
+        let plain = "Download from GitHub Releases and keep its helper.\n\nCovered in Installation."
+        pasteboard.setData(Data(html.utf8), forType: .html)
+        pasteboard.setString(plain, forType: .string)
+
+        let content = try XCTUnwrap(ClipboardReader.read(from: pasteboard))
+        let pin = manager.createPin(content: content, textMode: .richText)
+        let view = try XCTUnwrap(pin.contentView as? TextPinView)
+
+        view.setTextMode(.markdown, explicit: true)
+        XCTAssertEqual(
+            try text(of: view),
+            "Download from [GitHub Releases](https://github.com/example/releases) and keep its helper.\n\nCovered in [Installation](https://example.com/install)."
+        )
+    }
 }
 
 /// Markdown state across history: records keep the source plus the mode, and
