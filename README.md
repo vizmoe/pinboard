@@ -1,30 +1,30 @@
 # Pinboard
 
-A lightweight macOS menu-bar utility that turns clipboard content — plain
-text, rich text (RTF/RTFD), or images — into independent floating windows
-that stay on top of ordinary apps. Text pins are directly editable with full
-RTF fidelity, as plain text in the default font, or as Markdown source with
-rendered display; image pins support non-destructive annotation and crop.
-Built entirely with native Swift/AppKit — no Electron, no WebView.
+A macOS menu-bar utility that turns clipboard content (plain text, rich text
+RTF/RTFD, or images) into independent floating windows that stay on top of
+ordinary apps. Text pins are directly editable with full RTF fidelity, as
+plain text in the default font, or as Markdown source with rendered display;
+image pins support non-destructive annotation and crop. Built with Swift and
+AppKit.
 
 ## Features
 
-- **Pin the clipboard** — one action converts text, RTF, or an image into a
+- **Pin the clipboard**: One action converts text, RTF, or an image into a
   borderless always-on-top window. Multiple pins coexist independently.
-- **Pins panel in the menu bar** — click the status icon to see all current
+- **Pins panel in the menu bar**: Click the status icon to see all current
   pins with content previews; hidden pins are dimmed. A compact icon strip
   switches between Pins and History, pins the clipboard with the plus icon,
   and keeps Settings and Quit available while lists scroll. The eye, crossed
   eye and close icons in the strip act on all pins; those inside a card act on
   that pin. Closing a pin keeps its saved history. Empty Pins shows only the
   strip. Hover an action for its name; every icon also has an accessibility
-  label. Click outside, press
-  Escape or click the status icon again to dismiss the panel.
-- **Quick actions** — new pins appear at the pointer, clamped to the screen.
+  label. Click outside, press Escape or click the status icon again to dismiss
+  the panel.
+- **Quick actions**: New pins appear at the pointer, clamped to the screen.
   Double-click an idle pin to copy its content and close it. Use the pencil or
   context menu to edit; double-click within an active editor keeps its normal
   selection behavior.
-- **Editable rich text** — use the pencil to type, select, undo/redo; fonts, colors,
+- **Editable rich text**: Use the pencil to type, select, undo/redo; fonts, colors,
   backgrounds and paragraph styles survive import, editing and copy-out.
 - **Three text modes**, in order: **Rich Text Format**, **GitHub Flavored
   Markdown**, **Plain Text**. Rich Text Format preserves formatting; GFM uses
@@ -35,11 +35,11 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
   globally under **Settings → Text**,
   or per pin via the window's context menu; a per-pin switch stops that
   window from following the global default.
-- **Markdown themes** — colour a whole Markdown pin, paper included:
+- **Markdown themes**: Colour a whole Markdown pin, paper included:
   *Default* (system colours) and *Everforest Dark Hard*, picked with a live
   preview under **Settings → Text**. The source you edit stays the same; a
   pin you switched to a transparent background keeps it.
-- **Image annotation** — rectangle, ellipse, tapered fancy arrows (drag the
+- **Image annotation**: Rectangle, ellipse, tapered fancy arrows (drag the
   midpoint handle to curve), line, freehand, text (plain, solid pill box and
   outlined box styles), numbered counters, highlighter (rectangle and freehand
   modes), 3-in-1 redaction (irreversible mosaic, irreversible secure blur and
@@ -50,20 +50,20 @@ Built entirely with native Swift/AppKit — no Electron, no WebView.
   keys nudge (Shift = 10 points), ⌘D duplicates, Delete removes. A slider drag
   is one undo step. Interaction ideas follow CleanShot X and
   [Snapzy's annotation editor](https://github.com/duongductrong/Snapzy/blob/master/docs/ANNOTATE.md).
-- **Charts in pasted messages** — when a copied message ships its image only
+- **Charts in pasted messages**: When a copied message ships its image only
   as an `<img>` reference (typical for Discord, Slack and web chat), the
   picture is fetched and shown inside the pin instead of an empty
   placeholder. Markdown pins show `![alt](url)` pictures the same way.
-- **Pin history** — every pin is recorded locally (latest edited state,
+- **Pin history**: Every pin is recorded locally (latest edited state,
   including editable annotation data). Open History in the menu bar panel to
   search, preview, pin again, copy or delete an entry without leaving the panel.
   Clear History reveals cancel and red trash icons for confirmation and keeps
   records associated with open pins. Retention is configurable in Settings.
-- **Transparent text pins** — text floats directly over the desktop; only
+- **Transparent text pins**: Text floats directly over the desktop; only
   runs you explicitly give a background to show one.
-- **Global hotkey** — `⌃⌥⇧⌘P` (Hyper+P) pins the clipboard from anywhere;
+- **Global hotkey**: `⌃⌥⇧⌘P` (Hyper+P) pins the clipboard from anywhere;
   re-recordable in Settings.
-- **URL Scheme** — drive Pinboard from scripts and other apps (below).
+- **URL Scheme**: Drive Pinboard from scripts and other apps (below).
 
 ## Global Shortcut
 
@@ -93,7 +93,7 @@ open "pinboard://toggle"  # hide all if any are visible, else show all
 
 Notes:
 
-- `show` / `hide` / `toggle` never recreate windows — they only change
+- `show` / `hide` / `toggle` never recreate windows; they only change
   visibility, preserving each pin's content, frame and editing state.
 - `toggle` hides everything when at least one pin is visible, otherwise
   shows all hidden pins; with no pins it does nothing.
@@ -177,7 +177,7 @@ All clipboard processing happens locally. The one exception is deliberate and
 narrow: when pasted content references its image only by URL (no image bytes on
 the clipboard; common for Discord, Slack and web chat) or when a Markdown pin
 contains `![alt](url)`, that single image is downloaded once so the pin can
-show it — nothing is ever uploaded and the request carries no cookies or URL
+show it. Nothing is ever uploaded and the request carries no cookies or URL
 credentials. HTTP(S) image connections reject local/private/reserved addresses
 at socket creation, including redirect destinations; downloads are limited to
 20 MiB each, four concurrent requests and 64 pending URLs. Local `file:` images
