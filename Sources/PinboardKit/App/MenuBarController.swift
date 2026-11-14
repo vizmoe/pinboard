@@ -1,15 +1,17 @@
 import AppKit
 
-/// The status item opens one popover for pins and history. Actions resolve current
-/// identities through the manager, including buttons retained after a close.
-final class MenuBarController: NSObject, NSPopoverDelegate {
+/// The status item opens one borderless floating glass panel for pins and history.
+/// Actions resolve current identities through the manager, including buttons retained
+/// after a close.
+final class MenuBarController: NSObject {
     enum Page: Equatable {
         case pins
         case history
     }
 
     let statusItem: NSStatusItem
-    let popover = NSPopover()
+    let panel = MenuBarFloatingPanel()
+    var popover: MenuBarFloatingPanel { panel }
     let pinsViewController: PinsPanelViewController
     private(set) var historyViewController: HistoryPanelViewController?
     private(set) var activePage: Page = .pins
@@ -30,41 +32,74 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         super.init()
 
         let button = statusItem.button
-        button?.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinboard")
-        button?.image?.isTemplate = true
+        let symbol = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinboard")?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
+        symbol?.isTemplate = true
+        button?.image = symbol
         button?.target = self
         button?.action = #selector(togglePanel(_:))
+        button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         button?.setAccessibilityLabel("Pinboard")
 
-        popover.behavior = .transient
-        popover.animates = false
-        popover.contentViewController = pinsViewController
-        popover.delegate = self
+        panel.contentViewController = pinsViewController
+        panel.onDidShow = { [weak self] in self?.panelDidShow() }
+        panel.onDidClose = { [weak self] in self?.panelDidClose() }
         pinsSizeObservation = observeSize(of: pinsViewController)
         pinsViewController.onUtilityAction = { [weak self] action in self?.perform(action) }
-        pinsViewController.onDismiss = { [weak self] in self?.popover.performClose(nil) }
+        pinsViewController.onDismiss = { [weak self] in self?.panel.performClose(nil) }
         manager.onChange = { [weak self] in self?.pinsDidChange() }
         pinsDidChange()
     }
 
     deinit {
-        popover.close()
+        panel.close()
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
     private var isShowingHistory: Bool { activePage == .history }
 
     @objc func togglePanel(_ sender: Any?) {
-        if popover.isShown {
-            popover.performClose(sender)
+        if let button = statusItem.button,
+           sender as AnyObject? === button,
+           let event = NSApp.currentEvent,
+           event.type == .rightMouseUp || (event.type == .leftMouseUp && event.modifierFlags.contains(.control)) {
+            panel.performClose(sender)
+            presentStatusItemContextMenu(from: button)
+            return
+        }
+        if panel.isShown {
+            panel.performClose(sender)
         } else if let anchor = (sender as? NSView) ?? statusItem.button {
             refreshActivePage()
-            popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+            panel.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
         }
     }
 
-    func popoverDidShow(_ notification: Notification) {
-        let view = popover.contentViewController?.view
+    private func presentStatusItemContextMenu(from button: NSStatusBarButton) {
+        let menu = NSMenu(title: "Pinboard")
+        let pasteItem = NSMenuItem(title: "Pin Clipboard", action: #selector(contextPaste), keyEquivalent: "")
+        pasteItem.target = self
+        menu.addItem(pasteItem)
+        menu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(contextOpenSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        let quitItem = NSMenuItem(title: "Quit Pinboard", action: #selector(contextQuit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+    }
+
+    @objc private func contextPaste() { perform(.paste) }
+    @objc private func contextOpenSettings() { perform(.settings) }
+    @objc private func contextQuit() { perform(.quit) }
+
+    private func panelDidShow() {
+        statusItem.button?.highlight(true)
+        let view = panel.contentViewController?.view
         view?.window?.makeKey()
         if isShowingHistory {
             historyViewController?.isPageActive = true
@@ -74,7 +109,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
     }
 
-    func popoverDidClose(_ notification: Notification) {
+    private func panelDidClose() {
+        statusItem.button?.highlight(false)
+        pinsViewController.clearHoverState()
+        historyViewController?.clearHoverState()
         historyViewController?.isPageActive = false
     }
 
@@ -84,12 +122,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             showHistory()
         case .pins:
             pinsViewController.reloadPins()
-            syncPopoverSize(for: pinsViewController)
+            syncPanelSize(for: pinsViewController)
         }
     }
 
     private func showHistory() {
         activePage = .history
+        pinsViewController.clearHoverState()
         manager.flushAllHistorySyncs()
         if historyViewController == nil || historyViewController?.model?.store !== manager.historyStore {
             let model = manager.historyStore.map {
@@ -99,48 +138,48 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             history.onBack = { [weak self, weak history] in
                 guard let self else { return }
                 self.activePage = .pins
+                history?.clearHoverState()
                 history?.isPageActive = false
-                self.popover.contentViewController = self.pinsViewController
+                self.panel.contentViewController = self.pinsViewController
                 self.pinsViewController.reloadPins()
-                self.syncPopoverSize(for: self.pinsViewController)
+                self.syncPanelSize(for: self.pinsViewController)
                 self.pinsViewController.view.window?.makeFirstResponder(self.pinsViewController.view)
             }
-            history.onDismiss = { [weak self] in self?.popover.performClose(nil) }
+            history.onDismiss = { [weak self] in self?.panel.performClose(nil) }
             history.onUtilityAction = { [weak self] in self?.perform($0) }
             historyViewController = history
             historySizeObservation = observeSize(of: history)
         }
         historyViewController?.isPageActive = true
-        if popover.contentViewController !== historyViewController {
-            popover.contentViewController = historyViewController
+        if panel.contentViewController !== historyViewController {
+            panel.contentViewController = historyViewController
         }
         historyViewController?.reloadHistory()
-        if let historyViewController { syncPopoverSize(for: historyViewController) }
-        if popover.isShown { historyViewController?.focusSearch() }
+        if let historyViewController { syncPanelSize(for: historyViewController) }
+        if panel.isShown { historyViewController?.focusSearch() }
     }
 
     private func observeSize(of page: NSViewController) -> NSKeyValueObservation {
         page.observe(\.preferredContentSize, options: [.new]) { [weak self] page, _ in
-            self?.syncPopoverSize(for: page)
+            self?.syncPanelSize(for: page)
         }
     }
 
-    private func syncPopoverSize(for page: NSViewController) {
-        // Older AppKit versions resize the page without updating the popover's
-        // content size. Only the active page may resize the shared container.
-        guard popover.contentViewController === page,
-              popover.contentSize != page.preferredContentSize else { return }
-        popover.contentSize = page.preferredContentSize
+    private func syncPanelSize(for page: NSViewController) {
+        guard panel.contentViewController === page,
+              panel.contentSize != page.preferredContentSize else { return }
+        panel.contentSize = page.preferredContentSize
     }
 
     private func pinsDidChange() {
         statusItem.button?.toolTip = "Pinboard · \(manager.count) pins · \(manager.visibleCount) visible"
-        guard popover.isShown, !isShowingHistory, !refreshScheduled else { return }
+        historyViewController?.toolbar.pinCount = manager.count
+        guard panel.isShown, !isShowingHistory, !refreshScheduled else { return }
         refreshScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.refreshScheduled = false
-            if self.popover.isShown, !self.isShowingHistory { self.pinsViewController.reloadPins() }
+            if self.panel.isShown, !self.isShowingHistory { self.pinsViewController.reloadPins() }
         }
     }
 
@@ -151,10 +190,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         case .history:
             showHistory()
         case .settings:
-            popover.performClose(nil)
+            panel.performClose(nil)
             onOpenSettings()
         case .quit:
-            popover.performClose(nil)
+            panel.performClose(nil)
             NSApp.terminate(nil)
         }
     }

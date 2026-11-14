@@ -11,15 +11,18 @@ AppKit.
 
 - **Pin the clipboard**: One action converts text, RTF, or an image into a
   borderless always-on-top window. Multiple pins coexist independently.
-- **Pins panel in the menu bar**: Click the status icon to see all current
-  pins with content previews; hidden pins are dimmed. A compact icon strip
-  switches between Pins and History, pins the clipboard with the plus icon,
-  and keeps Settings and Quit available while lists scroll. The eye, crossed
-  eye and close icons in the strip act on all pins; those inside a card act on
-  that pin. Closing a pin keeps its saved history. Empty Pins shows only the
-  strip. Hover an action for its name; every icon also has an accessibility
-  label. Click a card to show that pin; `⌘F` jumps to History search. Click
-  outside, press Escape or click the status icon again to dismiss the panel.
+- **Pins panel in the menu bar**: Click the status icon to open a borderless
+  floating glass panel showing current pins with thumbnails and two-line
+  previews; hidden pins are badged and dimmed. A persistent header anchors the
+  Pins / History segmented switcher (with a live open-pin badge) on the left,
+  and a prominent `+ Pin` button plus a gear menu (Settings / Quit) on the
+  right. When pins are open, a contextual bottom bar shows a plain-language
+  count summary alongside bulk visibility toggle (Hide All when any pin is
+  visible, Show All otherwise) and Close All; when none are open, an empty state
+  shows how to pin the clipboard. Hover any row to reveal per-pin visibility
+  toggle and Close actions, or click a row directly to bring that pin forward;
+  `⌘F` jumps to History search. Closing a pin keeps its saved history. Click
+  outside, press Escape or click the status icon again to dismiss.
 - **Quick actions**: New pins appear at the pointer, clamped to the screen.
   Double-click an idle pin to copy its content and close it. Use the pencil or
   context menu to edit; double-click within an active editor keeps its normal
@@ -58,11 +61,12 @@ AppKit.
   placeholder. Markdown pins show `![alt](url)` pictures the same way.
 - **Pin history**: Every pin is recorded locally (latest edited state,
   including editable annotation data). Open History in the menu bar panel to
-  search, preview, pin again, copy or delete an entry without leaving the panel.
-  In an entry's preview, Return pins it again, Delete removes it and Escape
-  goes back to the list.
-  Clear History reveals cancel and red trash icons for confirmation and keeps
-  records associated with open pins. Retention is configurable in Settings.
+  search, hover any row to quickly Pin Again or Copy, or click an entry to
+  preview, re-pin, copy or delete it via the contextual bottom bar without
+  leaving the panel. In an entry's preview, Return pins it again, Delete removes
+  it and Escape goes back to the list. Clear History blushes the bottom bar
+  crimson in place with cancel and confirm actions while keeping records
+  associated with open pins. Retention is configurable in Settings.
 - **Pin window controls**: Hovering a pin shows Close (top left), Hide (top
   right), Edit or Annotate (bottom left), Save (bottom right: PNG for images,
   Markdown for text) and Copy (centre). Pinch over an image pin to
@@ -110,8 +114,8 @@ Notes:
   as a Markdown pin, RTF/RTFD as rich text, images as image pins and other
   UTF-8 text as a text pin.
 - Commands do not steal keyboard focus from the app you're using.
-- The status panel provides pin creation and individual or bulk Show/Hide/Close
-  controls through the same window manager. `toggle` remains available via URL.
+- The status panel provides pin creation, single-pin or bulk visibility toggling
+  and close controls through the same window manager.
 
 ## Installation
 

@@ -38,25 +38,40 @@ final class MenuBarControllerTests: XCTestCase {
         try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.pngData())))
     }
 
-    func testEmptyStateDisablesBulkActionsWithoutRemovingUtilityButtons() throws {
+    func testEmptyStateHidesBulkActionsWithoutRemovingUtilityButtons() throws {
         panel.reloadPins()
         XCTAssertTrue(panel.rows.isEmpty)
-        XCTAssertFalse(descendants(panel.view).contains { $0 is NSTextField && !$0.isHiddenOrHasHiddenAncestor })
-        for title in ["Show All", "Hide All", "Close All"] { XCTAssertFalse(try button(title).isEnabled) }
-        for title in ["Pin Clipboard", "History", "Settings", "Quit"] { XCTAssertTrue(try button(title).isEnabled) }
+        XCTAssertFalse(panel.emptyStateView.isHidden, "An empty panel explains how to create a pin")
+        XCTAssertTrue(panel.footer.isHidden)
+        XCTAssertTrue(panel.toggleVisibilityButton.isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(panel.closeAllButton.isHiddenOrHasHiddenAncestor)
+        XCTAssertFalse(panel.toggleVisibilityButton.isEnabled)
+        XCTAssertFalse(panel.closeAllButton.isEnabled)
+        for title in ["Pins", "History", "Pin Clipboard", "App Menu"] {
+            XCTAssertTrue(try button(title).isEnabled)
+        }
     }
 
-    func testActionsShareOneIconStripWithoutShortcutHints() throws {
+    func testActionsSeparateSymmetricTopHeaderFromBottomBulkFooter() throws {
+        _ = textPin("One")
         panel.reloadPins()
         panel.view.layoutSubtreeIfNeeded()
         let buttons = descendants(panel.view).compactMap { $0 as? NSButton }
-        XCTAssertTrue(buttons.allSatisfy { $0.title.isEmpty && $0.keyEquivalent.isEmpty })
+        XCTAssertTrue(buttons.allSatisfy { $0.keyEquivalent.isEmpty })
+        XCTAssertTrue(buttons.compactMap { $0 as? PanelIconButton }.allSatisfy { $0.title.isEmpty })
+
         let navigation = try button("Pins")
-        let y = navigation.convert(navigation.bounds, to: panel.view).midY
-        for title in ["Show All", "Hide All", "Close All", "Settings", "Quit"] {
+        let topY = navigation.convert(navigation.bounds, to: panel.view).midY
+        for title in ["History", "Pin Clipboard", "App Menu"] {
             let control = try button(title)
-            XCTAssertEqual(control.convert(control.bounds, to: panel.view).midY, y, accuracy: 1)
+            XCTAssertEqual(control.convert(control.bounds, to: panel.view).midY, topY, accuracy: 1)
         }
+
+        let toggle = try button("Toggle Visibility")
+        let closeAll = try button("Close All")
+        let footerY = toggle.convert(toggle.bounds, to: panel.view).midY
+        XCTAssertEqual(closeAll.convert(closeAll.bounds, to: panel.view).midY, footerY, accuracy: 1)
+        XCTAssertGreaterThan(footerY, topY + 60, "Bulk collection actions belong in the bottom footer")
     }
 
     func testPanelListsVisibleAndHiddenPinsWithImmediateImagePreviews() throws {
@@ -68,8 +83,10 @@ final class MenuBarControllerTests: XCTestCase {
         XCTAssertEqual(panel.rows[0].titleLabel.stringValue, "Meeting notes ship the panel")
         XCTAssertTrue(panel.rows[0].accessibilityLabel()?.contains("Visible") == true)
         XCTAssertTrue(panel.rows[1].accessibilityLabel()?.contains("Hidden") == true)
-        XCTAssertTrue(panel.rows[0].hideButton.isEnabled)
-        XCTAssertFalse(panel.rows[1].hideButton.isEnabled)
+        XCTAssertEqual(panel.rows[0].visibilityButton.symbolName, "eye.slash")
+        XCTAssertEqual(panel.rows[0].visibilityButton.toolTip, "Hide Pin")
+        XCTAssertEqual(panel.rows[1].visibilityButton.symbolName, "eye")
+        XCTAssertEqual(panel.rows[1].visibilityButton.toolTip, "Show Pin")
         let thumbnail = try bitmap(XCTUnwrap(panel.rows[1].previewView.image))
         let pixel = try XCTUnwrap(thumbnail.colorAt(x: thumbnail.pixelsWide / 2,
                                                   y: thumbnail.pixelsHigh / 2)?.usingColorSpace(.sRGB))
@@ -78,45 +95,57 @@ final class MenuBarControllerTests: XCTestCase {
         XCTAssertFalse(second.isPinVisible, "previewing must not show a hidden pin")
     }
 
-    func testSingleShowAndHideOnlyChangeTheSelectedPin() throws {
+    func testSingleVisibilityToggleOnlyChangesTheSelectedPin() throws {
         let first = textPin("first")
         let second = textPin("second")
         let frame = second.panel.frame
         manager.hideAll()
         panel.reloadPins()
         let row = panel.rows[1]
-        row.showButton.performClick(nil)
+        XCTAssertEqual(row.visibilityButton.toolTip, "Show Pin")
+        row.visibilityButton.performClick(nil)
         XCTAssertFalse(first.isPinVisible)
         XCTAssertTrue(second.isPinVisible)
         XCTAssertTrue(panel.rows[1].accessibilityLabel()?.contains("Visible") == true)
+        XCTAssertEqual(row.visibilityButton.toolTip, "Hide Pin")
         XCTAssertTrue(panel.rows[1] === row)
-        row.hideButton.performClick(nil)
+        row.visibilityButton.performClick(nil)
         XCTAssertFalse(second.isPinVisible)
-        XCTAssertFalse(row.hideButton.isEnabled)
+        XCTAssertEqual(row.visibilityButton.toolTip, "Show Pin")
         XCTAssertEqual(second.panel.frame, frame)
         XCTAssertEqual(manager.count, 2)
     }
 
-    func testBulkShowHideCloseAndReturnToEmptyState() throws {
+    func testBulkVisibilityToggleAndCloseAllReturnToEmptyState() throws {
         let first = textPin("first")
         let second = textPin("second")
         second.hidePin()
         let identities = manager.pins.map(\.id)
         panel.reloadPins()
-        try button("Show All").performClick(nil)
-        XCTAssertEqual(manager.visibleCount, 2)
-        try button("Hide All").performClick(nil)
+
+        // Any visible pin -> Toggle Visibility offers "Hide All" and hides everything on click.
+        let toggle = try XCTUnwrap(try button("Toggle Visibility") as? PanelIconButton)
+        XCTAssertEqual(toggle.symbolName, "eye.slash")
+        XCTAssertEqual(toggle.toolTip, "Hide All")
+        toggle.performClick(nil)
         XCTAssertEqual(manager.visibleCount, 0)
         XCTAssertEqual(manager.pins.map(\.id), identities)
-        XCTAssertFalse(try button("Hide All").isEnabled)
-        XCTAssertTrue(try button("Show All").isEnabled)
-        try button("Show All").performClick(nil)
+
+        // All hidden -> Toggle Visibility flips to "Show All" and restores everything on click.
+        XCTAssertEqual(toggle.symbolName, "eye")
+        XCTAssertEqual(toggle.toolTip, "Show All")
+        toggle.performClick(nil)
+        XCTAssertEqual(manager.visibleCount, 2)
         XCTAssertTrue(first.isPinVisible)
         XCTAssertTrue(second.isPinVisible)
+        XCTAssertEqual(toggle.symbolName, "eye.slash")
+        XCTAssertEqual(toggle.toolTip, "Hide All")
+
         try button("Close All").performClick(nil)
         XCTAssertEqual(manager.count, 0)
         XCTAssertTrue(panel.rows.isEmpty)
-        XCTAssertFalse(try button("Close All").isEnabled)
+        XCTAssertTrue(panel.footer.isHidden)
+        XCTAssertFalse(panel.closeAllButton.isEnabled)
     }
 
     func testClosePreservesOtherPinsClipboardAndLatestHistory() throws {
@@ -168,8 +197,7 @@ final class MenuBarControllerTests: XCTestCase {
         let stale = panel.rows[0]
         pin.closePin()
         let replacement = textPin("new")
-        stale.showButton.performClick(nil)
-        stale.hideButton.performClick(nil)
+        stale.visibilityButton.performClick(nil)
         stale.closeButton.performClick(nil)
         XCTAssertEqual(manager.pins.map(\.id), [replacement.id])
         XCTAssertTrue(replacement.isPinVisible)
@@ -187,7 +215,7 @@ final class MenuBarControllerTests: XCTestCase {
         panel.scrollView.reflectScrolledClipView(panel.scrollView.contentView)
         let bulk = try button("Close All")
         let before = bulk.convert(bulk.bounds, to: panel.view)
-        panel.rows[4].hideButton.performClick(nil)
+        panel.rows[4].visibilityButton.performClick(nil)
         XCTAssertEqual(panel.scrollView.contentView.bounds.origin.y, 240, accuracy: 1)
         XCTAssertEqual(bulk.convert(bulk.bounds, to: panel.view), before)
         XCTAssertTrue(panel.rows[4].accessibilityLabel()?.contains("Hidden") == true)
@@ -200,7 +228,38 @@ final class MenuBarControllerTests: XCTestCase {
         XCTAssertLessThan(panel.rows[0].titleLabel.stringValue.count, 100)
         XCTAssertTrue(panel.rows[0].titleLabel.stringValue.contains("…"))
         XCTAssertTrue(panel.rows[1].titleLabel.isHidden)
-        XCTAssertTrue(panel.rows[1].showButton.accessibilityLabel()?.contains("Empty Text") == true)
+        XCTAssertTrue(panel.rows[1].visibilityButton.accessibilityLabel()?.contains("Empty Text") == true)
+    }
+
+    func testHoveringOneRowClearsSiblingsAndClosingPanelClearsStaleHover() throws {
+        _ = textPin("First")
+        _ = textPin("Second")
+        _ = textPin("Third")
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        controller.togglePanel(anchor)
+        XCTAssertEqual(panel.rows.count, 3)
+
+        let enterEvent = try XCTUnwrap(NSEvent.enterExitEvent(
+            with: .mouseEntered,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: controller.panel.window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        ))
+        panel.rows[0].mouseEntered(with: enterEvent)
+        XCTAssertEqual(panel.rows.map(\.isHovered), [true, false, false])
+
+        panel.rows[1].mouseEntered(with: enterEvent)
+        XCTAssertEqual(panel.rows.map(\.isHovered), [false, true, false],
+                       "Entering a second row must clear stale hover on sibling rows")
+
+        controller.panel.close()
+        XCTAssertEqual(panel.rows.map(\.isHovered), [false, false, false],
+                       "Closing the floating panel must reset row hover states before reuse")
     }
 
     func testTextPreviewReadsLiveEditsWithoutChangingTheEditor() throws {

@@ -71,6 +71,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Menu actions
 
     @objc func openSettings(_ sender: Any?) {
+        menuBarController?.panel.close()
         showSettings()
     }
 

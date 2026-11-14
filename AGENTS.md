@@ -40,13 +40,16 @@ open -a .build/Pinboard.app "pinboard://paste"
 `Sources/PinboardApp` is only `main.swift`; everything else is the `PinboardKit`
 library so it can be unit tested (`@testable import PinboardKit`).
 
-- `App` — delegate, main menu, status bar menu, URL router, toast, `HotKeyManager`
-  (Carbon `RegisterEventHotKey`; default `⌃⌥⇧⌘P`, persisted in `Preferences`)
+- `App` — delegate, main menu, floating glass status panel (`MenuBarController`,
+  `PinsPanelViewController`, `MenuBarPanelChrome`), URL router, toast,
+  `HotKeyManager` (Carbon `RegisterEventHotKey`; default `⌃⌥⇧⌘P`, persisted in
+  `Preferences`)
 - `Core` — `PinContent`, `PinSnapshot`, `Preferences`, `HistoryStore`,
   `TextContentMode`
-- `History` — `HistoryPanelViewController`/`HistoryViewModel` inside the status
-  popover (search, preview, Pin Again, Copy, Delete, confirmed Clear; list keeps
-  `updatedAt`-desc records). Clear preserves records associated with open pins.
+- `History` — `HistoryPanelViewController`/`HistoryViewModel` inside the
+  borderless floating status panel (search, hover quick-actions, preview, Pin
+  Again, Copy, Delete, confirmed Clear; list keeps `updatedAt`-desc records).
+  Clear preserves records associated with open pins.
 - `Clipboard` — pasteboard resolution (RTFD > RTF > image > HTML > plain),
   `HTMLImages` (parses `<img src>` out of pasted HTML), `RemoteImageLoader`
   (fetches remote images off the main thread; session cache)

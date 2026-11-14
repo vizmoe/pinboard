@@ -126,8 +126,7 @@ final class StatusPanelTests: XCTestCase {
         let view = controller.pinsViewController.view
         view.layoutSubtreeIfNeeded()
         XCTAssertLessThanOrEqual(view.frame.width, 400)
-        for button in buttons(in: view) {
-            XCTAssertTrue(button.title.isEmpty, "Actions should use icons: \(button.title)")
+        for button in buttons(in: view).compactMap({ $0 as? PanelIconButton }) {
             XCTAssertNotNil(button.image)
             XCTAssertEqual(button.imagePosition, .imageOnly)
             XCTAssertFalse(button.toolTip?.isEmpty ?? true)
@@ -145,10 +144,10 @@ final class StatusPanelTests: XCTestCase {
         let second = manager.createPin(content: .text(NSAttributedString(string: "second")), textMode: .plainText)
         flushUpdates()
         XCTAssertEqual(panel.rows.map(\.pinID), [first.id, second.id])
-        panel.rows[1].hideButton.performClick(nil)
+        panel.rows[1].visibilityButton.performClick(nil)
         XCTAssertTrue(controller.popover.isShown)
         XCTAssertFalse(second.isPinVisible)
-        panel.rows[1].showButton.performClick(nil)
+        panel.rows[1].visibilityButton.performClick(nil)
         XCTAssertTrue(controller.popover.isShown)
         XCTAssertTrue(second.isPinVisible)
         panel.rows[1].closeButton.performClick(nil)
@@ -184,10 +183,12 @@ final class StatusPanelTests: XCTestCase {
         let window = controller.pinsViewController.view.window
         try XCTUnwrap(buttons(in: controller.pinsViewController.view).first { $0.identifier?.rawValue == "History" }).performClick(nil)
         XCTAssertTrue(controller.popover.isShown)
-        let history = try XCTUnwrap(controller.popover.contentViewController)
+        let history = try XCTUnwrap(controller.historyViewController)
+        XCTAssertTrue(controller.popover.contentViewController === history)
         XCTAssertFalse(history === controller.pinsViewController)
         XCTAssertTrue(history.view.window === window)
-        try XCTUnwrap(buttons(in: history.view).first { $0.identifier?.rawValue == "Settings" }).performClick(nil)
+        let settingsIndex = try XCTUnwrap(history.toolbar.appMenu.items.firstIndex { $0.identifier?.rawValue == "Settings" })
+        history.toolbar.appMenu.performActionForItem(at: settingsIndex)
         XCTAssertEqual(settings, 1)
         XCTAssertFalse(controller.popover.isShown)
     }
@@ -297,6 +298,11 @@ final class StatusPanelTests: XCTestCase {
             let imageID = try store.upsert(content: state.content, annotationData: state.annotationData)
             _ = try store.upsert(content: .text(NSAttributedString(string: String(repeating: "设计笔记 👩🏽‍💻 A long title ", count: 8))))
             try capture("history-\(name)")
+            if let hoveredHistoryRow = history.tableView.view(atColumn: 0, row: 0, makeIfNecessary: false) as? HistoryRowView {
+                hoveredHistoryRow.isHovered = true
+                try capture("hovered-history-\(name)")
+                hoveredHistoryRow.isHovered = false
+            }
             history.searchField.stringValue = "checklist"
             history.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: history.searchField))
             XCTAssertEqual(history.records.map(\.id), [textID])
@@ -321,6 +327,11 @@ final class StatusPanelTests: XCTestCase {
             imagePin.hidePin()
             flushUpdates()
             try capture("pins-\(name)")
+            if let firstPinRow = controller.pinsViewController.rows.first {
+                firstPinRow.isHovered = true
+                try capture("hovered-pins-\(name)")
+                firstPinRow.isHovered = false
+            }
             for index in 0..<12 {
                 _ = manager.createPin(content: .text(NSAttributedString(string: "\(index) · " + String(repeating: "Long title 中文 👩🏽‍💻 ", count: 12))), textMode: .plainText)
             }
@@ -352,7 +363,11 @@ final class StatusPanelTests: XCTestCase {
         // NSSearchField owns native search/cancel buttons with internal cell
         // titles. The app's navigation and action controls are PanelIconButton.
         let actions = buttons(in: view).compactMap { $0 as? PanelIconButton }
-        XCTAssertGreaterThanOrEqual(actions.count, 5)
+        XCTAssertFalse(actions.isEmpty)
+        for identifier in ["Pins", "History", "Pin Clipboard", "App Menu"] {
+            XCTAssertNotNil(buttons(in: view).first { $0.identifier?.rawValue == identifier && !$0.isHiddenOrHasHiddenAncestor },
+                            "\(name): header must expose \(identifier)")
+        }
         for button in actions where !button.isHiddenOrHasHiddenAncestor {
             XCTAssertTrue(button.title.isEmpty, "\(name): \(type(of: button)), title=\(button.title)")
             XCTAssertNotNil(button.image)
@@ -439,5 +454,86 @@ final class StatusPanelTests: XCTestCase {
         }
         XCTAssertEqual(historyButtons.filter { $0.state == .on }.map { $0.identifier?.rawValue }, ["History"],
                        "returning to Pins must not leave both navigation icons selected on the History toolbar")
+    }
+
+    func testBorderlessFloatingGlassPanelTopAnchoringAndRowInteractions() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer {
+            controller.panel.close()
+            manager.closeAll()
+            manager.historyStore = nil
+            pasteboard.releaseGlobally()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let store = HistoryStore(directory: directory)
+        manager.historyStore = store
+        controller = MenuBarController(manager: manager, historyPasteboard: pasteboard, onOpenSettings: {})
+        anchor.target = controller
+
+        anchor.performClick(nil)
+        let window = controller.panel.window
+        XCTAssertTrue(window.styleMask.contains(.borderless))
+        XCTAssertFalse(window.isOpaque)
+        XCTAssertEqual(window.frame.height, controller.pinsViewController.preferredContentSize.height, accuracy: 0.5)
+        let anchoredTopY = window.frame.maxY
+
+        // Adding a pin grows downward while keeping the top edge anchored below the menu bar.
+        let hiddenPin = manager.createPin(content: .text(NSAttributedString(string: "Click card to reveal")), textMode: .plainText)
+        hiddenPin.hidePin()
+        flushUpdates()
+        XCTAssertEqual(window.frame.maxY, anchoredTopY, accuracy: 1)
+        XCTAssertFalse(hiddenPin.isPinVisible)
+
+        // Clicking the card body directly reveals the hidden pin.
+        let row = try XCTUnwrap(controller.pinsViewController.rows.first)
+        let clickPoint = row.convert(NSPoint(x: 24, y: 24), to: nil)
+        let mouseUp = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: clickPoint,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+        row.mouseUp(with: mouseUp)
+        XCTAssertTrue(hiddenPin.isPinVisible)
+
+        // Hover quick actions on HistoryRowView copy and re-pin directly from the list.
+        try clickVisible("History")
+        let history = try XCTUnwrap(controller.historyViewController)
+        history.tableView.layoutSubtreeIfNeeded()
+        let historyRow = try XCTUnwrap(history.tableView.view(atColumn: 0, row: 0, makeIfNecessary: true) as? HistoryRowView)
+        historyRow.isHovered = true
+        historyRow.quickCopyButton.performClick(nil)
+        XCTAssertEqual(pasteboard.string(forType: .string), "Click card to reveal")
+        historyRow.quickPinButton.performClick(nil)
+        XCTAssertEqual(manager.count, 2)
+        XCTAssertNil(history.model?.selection, "Quick actions must not force open the detail view")
+
+        // Escape clears an active search query first, then closes on the next Escape.
+        window.makeFirstResponder(history.searchField)
+        history.searchField.stringValue = "Click"
+        history.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: history.searchField))
+        let escape = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false,
+            keyCode: 53
+        ))
+        window.sendEvent(escape)
+        XCTAssertTrue(controller.panel.isShown)
+        XCTAssertEqual(history.searchField.stringValue, "")
+        window.sendEvent(escape)
+        XCTAssertFalse(controller.panel.isShown)
     }
 }
