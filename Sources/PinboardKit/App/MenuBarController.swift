@@ -59,14 +59,6 @@ final class MenuBarController: NSObject {
     private var isShowingHistory: Bool { activePage == .history }
 
     @objc func togglePanel(_ sender: Any?) {
-        if let button = statusItem.button,
-           sender as AnyObject? === button,
-           let event = NSApp.currentEvent,
-           event.type == .rightMouseUp || (event.type == .leftMouseUp && event.modifierFlags.contains(.control)) {
-            panel.performClose(sender)
-            presentStatusItemContextMenu(from: button)
-            return
-        }
         if panel.isShown {
             panel.performClose(sender)
         } else if let anchor = (sender as? NSView) ?? statusItem.button {
@@ -74,28 +66,6 @@ final class MenuBarController: NSObject {
             panel.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
         }
     }
-
-    private func presentStatusItemContextMenu(from button: NSStatusBarButton) {
-        let menu = NSMenu(title: "Pinboard")
-        let pasteItem = NSMenuItem(title: "Pin Clipboard", action: #selector(contextPaste), keyEquivalent: "")
-        pasteItem.target = self
-        menu.addItem(pasteItem)
-        menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(contextOpenSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        let quitItem = NSMenuItem(title: "Quit Pinboard", action: #selector(contextQuit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
-    }
-
-    @objc private func contextPaste() { perform(.paste) }
-    @objc private func contextOpenSettings() { perform(.settings) }
-    @objc private func contextQuit() { perform(.quit) }
 
     private func panelDidShow() {
         statusItem.button?.highlight(true)
