@@ -130,11 +130,8 @@ final class ImagePinView: NSView, PinContentDisplaying {
     }
 
     override func magnify(with event: NSEvent) {
-        pinController?.handleMagnify(with: event)
-    }
-
-    override func scrollWheel(with event: NSEvent) {
-        pinController?.handleScrollWheel(with: event)
+        guard let pinController else { return }
+        (pinController.manager ?? .shared).handleResponderMagnify(event, for: pinController)
     }
 
     // MARK: - Annotation mode

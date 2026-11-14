@@ -65,7 +65,7 @@ AppKit.
   records associated with open pins. Retention is configurable in Settings.
 - **Pin window controls**: Hovering a pin shows Close (top left), Hide (top
   right), Edit or Annotate (bottom left), Save (bottom right: PNG for images,
-  Markdown for text) and Copy (centre). Pinch or scroll over an image pin to
+  Markdown for text) and Copy (centre). Pinch over an image pin to
   zoom; a badge shows the scale while it is not 100% and resets it on click.
   Text pins sit on an opaque paper sized to their content, and resize from
   their edges and re-wrap instead of zooming.

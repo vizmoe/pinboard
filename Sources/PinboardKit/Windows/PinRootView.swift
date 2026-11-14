@@ -32,7 +32,7 @@ final class PinRootView: NSView {
     }
 
     /// Explicit presentation state of the top-center zoom badge so hover,
-    /// non-hover transient scroll/pinch feedback, and 100% reset never desync.
+    /// non-hover transient pinch feedback, and 100% reset never desync.
     enum ZoomBadgeState: Equatable {
         case hidden
         case visibleWhileHovered
@@ -301,11 +301,8 @@ final class PinRootView: NSView {
     // MARK: - Trackpad zoom
 
     override func magnify(with event: NSEvent) {
-        pinController?.handleMagnify(with: event)
-    }
-
-    override func scrollWheel(with event: NSEvent) {
-        pinController?.handleScrollWheel(with: event)
+        guard let pinController else { return }
+        (pinController.manager ?? .shared).handleResponderMagnify(event, for: pinController)
     }
 
     // MARK: - Hit testing & mouse

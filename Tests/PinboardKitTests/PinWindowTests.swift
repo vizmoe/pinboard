@@ -12,8 +12,12 @@ final class URLCommandRouterTests: XCTestCase {
 
 final class PinWindowManagerTests: XCTestCase {
     private var manager: PinWindowManager { PinWindowManager.shared }
+    private static var nextSyntheticTimestamp: CGEventTimestamp = 1_000_000_000
 
     override func tearDown() {
+        manager.stopBackgroundGestureMonitoring()
+        manager.gestureTapBackend = .live
+        manager.externalOcclusionTester = PinWindowManager.isWindowOccludedInWindowServer
         manager.closeAll()
         super.tearDown()
     }
@@ -404,6 +408,428 @@ final class PinWindowManagerTests: XCTestCase {
         XCTAssertLessThan(shortPin.panel.frame.width, twoLinePin.panel.frame.width)
         XCTAssertLessThan(twoLinePin.panel.frame.width, mediumPin.panel.frame.width)
         XCTAssertLessThan(mediumPin.panel.frame.width, longPin.panel.frame.width)
+    }
+
+    private func makeMagnifyEvent(
+        windowNumber: Int,
+        phase: NSEvent.Phase,
+        magnification: Double,
+        location: CGPoint = CGPoint(x: 150, y: 100),
+        timestamp: CGEventTimestamp? = nil
+    ) throws -> NSEvent {
+        let cg = try XCTUnwrap(CGEvent(source: nil))
+        cg.type = try XCTUnwrap(CGEventType(rawValue: 29)) // kCGEventGesture
+        cg.location = location
+        cg.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 51)), value: Int64(windowNumber))
+        cg.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 110)), value: 8) // kIOHIDEventTypeZoom
+        cg.setDoubleValueField(try XCTUnwrap(CGEventField(rawValue: 113)), value: magnification)
+        let hidPhase: Int64
+        switch phase {
+        case .began: hidPhase = 1
+        case .changed: hidPhase = 2
+        case .ended: hidPhase = 4
+        case .cancelled: hidPhase = 8
+        case .stationary: hidPhase = 16
+        default: hidPhase = 0
+        }
+        cg.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 132)), value: hidPhase)
+        let resolvedTimestamp: CGEventTimestamp
+        if let timestamp {
+            resolvedTimestamp = timestamp
+        } else {
+            resolvedTimestamp = Self.nextSyntheticTimestamp
+            Self.nextSyntheticTimestamp += 10_000_000
+        }
+        cg.timestamp = resolvedTimestamp
+        let event = try XCTUnwrap(NSEvent(cgEvent: cg))
+        XCTAssertEqual(event.type, .magnify)
+        XCTAssertEqual(event.phase, phase)
+        return event
+    }
+
+    func testNonKeyImagePinReceivesTrackpadPinchMagnifyThroughNSAppSendEvent() throws {
+        _ = NSApplication.shared
+        let pin = manager.createPin(content: .image(TestImage.make(width: 600, height: 400)))
+        pin.setFrame(NSRect(x: 200, y: 200, width: 300, height: 200))
+        pin.panel.resignKey()
+        XCTAssertFalse(pin.panel.isKeyWindow, "idle pin panels do not hold key focus")
+
+        let centre = CGPoint(x: pin.panel.frame.midX, y: pin.panel.frame.midY)
+        let winNum = pin.panel.windowNumber
+
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: winNum, phase: .began, magnification: 0))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: winNum, phase: .changed, magnification: 0.25))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: winNum, phase: .changed, magnification: 0.20))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: winNum, phase: .ended, magnification: 0))
+
+        XCTAssertFalse(pin.panel.isKeyWindow, "passive pinch-to-zoom must not steal key focus")
+        XCTAssertEqual(pin.panel.frame.width, 450, accuracy: 1)
+        XCTAssertEqual(pin.panel.frame.height, 300, accuracy: 1)
+        XCTAssertEqual(pin.panel.frame.midX, centre.x, accuracy: 0.5)
+        XCTAssertEqual(pin.panel.frame.midY, centre.y, accuracy: 0.5)
+        XCTAssertEqual(pin.zoomPercentage, 150)
+        XCTAssertEqual(pin.rootView.zoomBadge.percentage, 150)
+        XCTAssertEqual(pin.rootView.zoomBadge.alphaValue, 1, accuracy: 0.01)
+    }
+
+    func testPinchMagnifyStaysLatchedWhenPinShrinksPastCursorOverBackgroundPin() throws {
+        _ = NSApplication.shared
+        let backPin = manager.createPin(content: .image(TestImage.make(width: 800, height: 600)))
+        backPin.setFrame(NSRect(x: 200, y: 200, width: 400, height: 300))
+        let frontPin = manager.createPin(content: .image(TestImage.make(width: 800, height: 600)))
+        frontPin.setFrame(NSRect(x: 200, y: 200, width: 400, height: 300))
+
+        // Begin pinching in on frontPin, then simulate the window shrinking past
+        // the stationary fingers so subsequent events report backPin's windowNumber.
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: frontPin.panel.windowNumber, phase: .began, magnification: 0))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: frontPin.panel.windowNumber, phase: .changed, magnification: -0.35))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: backPin.panel.windowNumber, phase: .changed, magnification: -0.20))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: backPin.panel.windowNumber, phase: .ended, magnification: 0))
+
+        XCTAssertEqual(frontPin.panel.frame.width, 400 * 0.65 * 0.80, accuracy: 1)
+        XCTAssertEqual(backPin.panel.frame.width, 400, accuracy: 0.5, "latched pinch must not spill onto background pin")
+        XCTAssertEqual(backPin.zoomPercentage, 100)
+
+        // Once the first gesture ends, a new pinch on backPin routes to backPin.
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: backPin.panel.windowNumber, phase: .began, magnification: 0))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: backPin.panel.windowNumber, phase: .changed, magnification: 0.25))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: backPin.panel.windowNumber, phase: .ended, magnification: 0))
+        XCTAssertEqual(backPin.panel.frame.width, 500, accuracy: 1)
+
+        // Pinching over a frontmost text pin is a no-op and does not leak to an image pin behind it.
+        let textPin = manager.createPin(content: textContent("front text"))
+        textPin.setFrame(NSRect(x: 200, y: 200, width: 300, height: 180))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: textPin.panel.windowNumber, phase: .began, magnification: 0))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: backPin.panel.windowNumber, phase: .changed, magnification: 0.30))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: backPin.panel.windowNumber, phase: .ended, magnification: 0))
+        XCTAssertEqual(textPin.panel.frame.width, 300, accuracy: 0.5)
+        XCTAssertEqual(backPin.panel.frame.width, 500, accuracy: 1)
+    }
+
+    func testKeyAnnotatingImagePinDoesNotDoubleZoomAndAttachedToolbarForwardsPinch() throws {
+        _ = NSApplication.shared
+        let pin = manager.createPin(content: .image(TestImage.make(width: 600, height: 400)))
+        pin.setFrame(NSRect(x: 200, y: 200, width: 300, height: 200))
+        let view = try XCTUnwrap(pin.contentView as? ImagePinView)
+        view.beginAnnotating()
+
+        let winNum = pin.panel.windowNumber
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: winNum, phase: .began, magnification: 0))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: winNum, phase: .changed, magnification: 0.25))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: winNum, phase: .ended, magnification: 0))
+        XCTAssertEqual(pin.panel.frame.width, 375, accuracy: 1, "key pin must zoom once per event, never twice")
+
+        let toolbarWinNum = try XCTUnwrap(view.annotationToolbar?.panel.windowNumber)
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: toolbarWinNum, phase: .began, magnification: 0))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: toolbarWinNum, phase: .changed, magnification: 0.20))
+        NSApp.sendEvent(try makeMagnifyEvent(windowNumber: toolbarWinNum, phase: .ended, magnification: 0))
+        XCTAssertEqual(pin.panel.frame.width, 450, accuracy: 1)
+        XCTAssertEqual(pin.zoomPercentage, 150)
+    }
+
+    private func makeEndGestureEvent() throws -> NSEvent {
+        let cg = try XCTUnwrap(CGEvent(source: nil))
+        cg.type = try XCTUnwrap(CGEventType(rawValue: 29)) // kCGEventGesture
+        cg.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 110)), value: 62) // endGesture
+        let event = try XCTUnwrap(NSEvent(cgEvent: cg))
+        XCTAssertEqual(event.type, .endGesture)
+        return event
+    }
+
+    func testBackgroundPinchMagnifyRoutesToHoveredPinWhileAppIsInactiveAndStaysLatched() throws {
+        _ = NSApplication.shared
+        manager.externalOcclusionTester = { _, _ in false }
+
+        let backPin = manager.createPin(content: .image(TestImage.make(width: 800, height: 600)))
+        backPin.setFrame(NSRect(x: 200, y: 200, width: 400, height: 300))
+        let frontPin = manager.createPin(content: .image(TestImage.make(width: 800, height: 600)))
+        frontPin.setFrame(NSRect(x: 200, y: 200, width: 400, height: 300))
+        frontPin.panel.resignKey()
+        XCTAssertFalse(frontPin.panel.isKeyWindow)
+
+        let centre = CGPoint(x: frontPin.panel.frame.midX, y: frontPin.panel.frame.midY)
+        // Near the top-right corner so shrinking frontPin leaves the cursor over backPin.
+        let pointer = CGPoint(x: 580, y: 480)
+
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .began, magnification: 0),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .changed, magnification: -0.35),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        XCTAssertFalse(frontPin.panel.frame.contains(pointer), "frontPin shrunk past stationary cursor")
+        XCTAssertTrue(backPin.panel.frame.contains(pointer))
+
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .changed, magnification: -0.20),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .ended, magnification: 0),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+
+        XCTAssertFalse(frontPin.panel.isKeyWindow, "background pinch must never steal focus")
+        XCTAssertEqual(frontPin.panel.frame.width, 400 * 0.65 * 0.80, accuracy: 1)
+        XCTAssertEqual(frontPin.panel.frame.midX, centre.x, accuracy: 0.5)
+        XCTAssertEqual(frontPin.panel.frame.midY, centre.y, accuracy: 0.5)
+        XCTAssertEqual(frontPin.zoomPercentage, 52)
+        XCTAssertEqual(backPin.panel.frame.width, 400, accuracy: 0.5, "latched pinch must not spill onto background pin")
+    }
+
+    func testBackgroundPinchRespectsOcclusionAndAvoidsActiveOrDuplicateEvents() throws {
+        _ = NSApplication.shared
+        let pin = manager.createPin(content: .image(TestImage.make(width: 600, height: 400)))
+        pin.setFrame(NSRect(x: 200, y: 200, width: 300, height: 200))
+        let pointer = CGPoint(x: 350, y: 300)
+
+        // 1. Higher-z-order external window occluding the pin blocks background zoom.
+        manager.externalOcclusionTester = { _, _ in true }
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .began, magnification: 0),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        manager.externalOcclusionTester = { _, _ in false }
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .changed, magnification: 0.30),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .ended, magnification: 0),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        XCTAssertEqual(pin.panel.frame.width, 300, accuracy: 0.5)
+
+        // 2. Non-pin Pinboard window above the pin (e.g. popover/settings) blocks background zoom.
+        let cover = NSPanel(
+            contentRect: NSRect(x: 200, y: 200, width: 300, height: 200),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        cover.level = .statusBar
+        cover.orderFrontRegardless()
+        defer { cover.orderOut(nil) }
+
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .began, magnification: 0),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .changed, magnification: 0.30),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .ended, magnification: 0),
+            pointerLocation: pointer,
+            isAppActive: false
+        )
+        XCTAssertEqual(pin.panel.frame.width, 300, accuracy: 0.5)
+        cover.orderOut(nil)
+
+        // 3. Non-key pins remain zoomable when Pinboard is active (real hardware
+        //    gestures bypass NSApp.sendEvent via Carbon _applicationGestureHandler),
+        //    while timestamp deduplication prevents double-zooming across channels.
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .changed, magnification: 0.20),
+            pointerLocation: pointer,
+            isAppActive: true
+        )
+        manager.routeBackgroundGestureEvent(try makeEndGestureEvent(), pointerLocation: pointer, isAppActive: true)
+        XCTAssertEqual(pin.panel.frame.width, 360, accuracy: 1, "active non-key pin must still zoom from HID tap")
+
+        let sharedEvent = try makeMagnifyEvent(
+            windowNumber: pin.panel.windowNumber,
+            phase: .changed,
+            magnification: 0.25
+        )
+        NSApp.sendEvent(sharedEvent)
+        manager.routeBackgroundGestureEvent(sharedEvent, pointerLocation: pointer, isAppActive: false)
+        pin.rootView.magnify(with: sharedEvent)
+        manager.routeBackgroundGestureEvent(try makeEndGestureEvent(), pointerLocation: pointer, isAppActive: false)
+        XCTAssertEqual(pin.panel.frame.width, 450, accuracy: 1, "event handled by local monitor must not zoom twice")
+
+        // Reverse arrival order (HID tap + endGesture first, then responder/local monitor) also deduplicates.
+        let reverseSharedEvent = try makeMagnifyEvent(
+            windowNumber: pin.panel.windowNumber,
+            phase: .changed,
+            magnification: 0.20
+        )
+        manager.routeBackgroundGestureEvent(reverseSharedEvent, pointerLocation: pointer, isAppActive: true)
+        manager.routeBackgroundGestureEvent(try makeEndGestureEvent(), pointerLocation: pointer, isAppActive: true)
+        pin.rootView.magnify(with: reverseSharedEvent)
+        NSApp.sendEvent(reverseSharedEvent)
+        XCTAssertEqual(pin.panel.frame.width, 540, accuracy: 1, "event handled by HID tap must not zoom twice even after endGesture")
+    }
+
+    func testScrollWheelDoesNotZoomImagePin() throws {
+        _ = NSApplication.shared
+        let pin = manager.createPin(content: .image(TestImage.make(width: 600, height: 400)))
+        pin.setFrame(NSRect(x: 200, y: 200, width: 300, height: 200))
+        let imageView = try XCTUnwrap(pin.contentView as? ImagePinView)
+
+        for (units, flags) in [(CGScrollEventUnit.pixel, CGEventFlags()),
+                               (.pixel, .maskCommand),
+                               (.line, CGEventFlags()),
+                               (.line, .maskCommand)] {
+            let cg = try XCTUnwrap(CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: units,
+                wheelCount: 2,
+                wheel1: 45,
+                wheel2: 0,
+                wheel3: 0
+            ))
+            cg.flags = flags
+            cg.setIntegerValueField(try XCTUnwrap(CGEventField(rawValue: 51)), value: Int64(pin.panel.windowNumber))
+            let scrollEvent = try XCTUnwrap(NSEvent(cgEvent: cg))
+            pin.rootView.scrollWheel(with: scrollEvent)
+            imageView.scrollWheel(with: scrollEvent)
+            NSApp.sendEvent(scrollEvent)
+        }
+
+        XCTAssertEqual(pin.panel.frame.width, 300, accuracy: 0.5, "two-finger vertical scroll must never zoom image pins")
+        XCTAssertEqual(pin.panel.frame.height, 200, accuracy: 0.5)
+        XCTAssertEqual(pin.zoomPercentage, 100)
+    }
+
+    func testEndGestureClearsInterruptedLatchedPinchState() throws {
+        _ = NSApplication.shared
+        manager.externalOcclusionTester = { _, _ in false }
+
+        let firstPin = manager.createPin(content: .image(TestImage.make(width: 600, height: 400)))
+        firstPin.setFrame(NSRect(x: 100, y: 200, width: 300, height: 200))
+        let secondPin = manager.createPin(content: .image(TestImage.make(width: 600, height: 400)))
+        secondPin.setFrame(NSRect(x: 500, y: 200, width: 300, height: 200))
+
+        let firstPointer = CGPoint(x: 250, y: 300)
+        let secondPointer = CGPoint(x: 650, y: 300)
+
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .began, magnification: 0),
+            pointerLocation: firstPointer,
+            isAppActive: false
+        )
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .changed, magnification: 0.20),
+            pointerLocation: firstPointer,
+            isAppActive: false
+        )
+        // Interrupted gesture emits .endGesture without .magnify(.ended).
+        manager.routeBackgroundGestureEvent(
+            try makeEndGestureEvent(),
+            pointerLocation: firstPointer,
+            isAppActive: false
+        )
+
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .changed, magnification: 0.25),
+            pointerLocation: secondPointer,
+            isAppActive: false
+        )
+        manager.routeBackgroundGestureEvent(
+            try makeMagnifyEvent(windowNumber: 0, phase: .ended, magnification: 0),
+            pointerLocation: secondPointer,
+            isAppActive: false
+        )
+
+        XCTAssertEqual(firstPin.panel.frame.width, 360, accuracy: 1)
+        XCTAssertEqual(secondPin.panel.frame.width, 375, accuracy: 1)
+    }
+
+    func testBackgroundGestureTapLifecycleTracksVisibleZoomablePins() throws {
+        final class MockTapHandle {
+            var isEnabled = true
+        }
+
+        var hasAccess = false
+        var createCount = 0
+        var invalidateCount = 0
+        var capturedCallback: ((CGEventType, CGEvent) -> Void)?
+
+        manager.gestureTapBackend = PinWindowManager.GestureTapBackend(
+            hasListenAccess: { hasAccess },
+            requestListenAccess: {
+                hasAccess = true
+                return true
+            },
+            createTap: { callback in
+                createCount += 1
+                guard hasAccess else { return nil }
+                capturedCallback = callback
+                return MockTapHandle()
+            },
+            setEnabled: { handle, enabled in
+                (handle as? MockTapHandle)?.isEnabled = enabled
+            },
+            isEnabled: { handle in
+                (handle as? MockTapHandle)?.isEnabled ?? false
+            },
+            invalidate: { handle in
+                (handle as? MockTapHandle)?.isEnabled = false
+                invalidateCount += 1
+            }
+        )
+
+        manager.startBackgroundGestureMonitoring()
+        XCTAssertFalse(manager.hasVisibleZoomablePin)
+        XCTAssertEqual(createCount, 0)
+        XCTAssertFalse(manager.isBackgroundGestureTapEnabled, "tap stays off when no zoomable pin is visible")
+
+        _ = manager.createPin(content: textContent("text only"))
+        XCTAssertFalse(manager.hasVisibleZoomablePin)
+        XCTAssertEqual(createCount, 0)
+        XCTAssertFalse(manager.isBackgroundGestureTapEnabled, "text pins do not zoom, so tap remains disabled")
+
+        // Without Input Monitoring access, tap creation is attempted once and not spammed.
+        let imagePin = manager.createPin(content: .image(TestImage.make(width: 400, height: 300)))
+        XCTAssertTrue(manager.hasVisibleZoomablePin)
+        XCTAssertEqual(createCount, 1)
+        XCTAssertFalse(manager.isBackgroundGestureTapEnabled)
+
+        let secondImagePin = manager.createPin(content: .image(TestImage.make(width: 400, height: 300)))
+        XCTAssertEqual(createCount, 1, "unprivileged session must not spam tapCreate on every pin change")
+        secondImagePin.closePin()
+
+        // Once access is granted, requesting/refreshing installs and enables the tap.
+        XCTAssertTrue(manager.requestBackgroundGestureAccess())
+        XCTAssertEqual(createCount, 2)
+        XCTAssertTrue(manager.isBackgroundGestureTapEnabled)
+
+        // Timeout disable automatically re-enables while a zoomable pin remains visible.
+        let dummyCGEvent = try XCTUnwrap(CGEvent(source: nil))
+        capturedCallback?(.tapDisabledByTimeout, dummyCGEvent)
+        XCTAssertTrue(manager.isBackgroundGestureTapEnabled)
+
+        manager.hideAll()
+        XCTAssertFalse(manager.hasVisibleZoomablePin)
+        XCTAssertFalse(manager.isBackgroundGestureTapEnabled)
+        XCTAssertEqual(createCount, 2, "hiding disables the existing tap without recreating it")
+
+        manager.showAll()
+        XCTAssertTrue(manager.hasVisibleZoomablePin)
+        XCTAssertTrue(manager.isBackgroundGestureTapEnabled)
+        XCTAssertEqual(createCount, 2)
+
+        imagePin.closePin()
+        XCTAssertFalse(manager.hasVisibleZoomablePin)
+        XCTAssertFalse(manager.isBackgroundGestureTapEnabled)
+        XCTAssertEqual(invalidateCount, 0)
+
+        manager.stopBackgroundGestureMonitoring()
+        XCTAssertEqual(invalidateCount, 1)
+        XCTAssertFalse(manager.isBackgroundGestureTapEnabled)
     }
 }
 

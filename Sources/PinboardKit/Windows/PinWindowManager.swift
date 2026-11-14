@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 
 /// Single source of truth for every pin window. The menu bar and the URL
 /// scheme both drive the app exclusively through this type.
@@ -28,12 +29,217 @@ final class PinWindowManager {
     private var pendingHistoryWrites: [UUID: DispatchWorkItem] = [:]
     private var lastHistoryPrune: Date = .distantPast
 
+    /// Routes trackpad pinch-to-zoom (`NSEvent.EventType.magnify`) across the
+    /// gesture lifecycle. Two macOS layers require explicit routing:
+    /// 1. WindowServer sends trackpad `kCGEventGesture` (`Zoom`) exclusively to
+    ///    the foreground application, so an inactive `.accessory` app never
+    ///    receives `.magnify` in `NSApp` for hovered `.nonactivatingPanel` pins;
+    ///    a listen-only `CGEvent` HID tap observes pinch gestures while any
+    ///    zoomable pin is visible without stealing focus.
+    /// 2. When Pinboard is active, AppKit's `_applicationGestureHandler` handles
+    ///    Carbon `kEventClassGesture` directly (bypassing `NSApp.sendEvent` and
+    ///    local `NSEvent` monitors) and `routeGestureEvent` drops `.magnify` on
+    ///    non-key borderless `.nonactivatingPanel` windows; a Carbon application
+    ///    gesture handler plus local `NSEvent` monitor route those events cleanly.
+    private enum MagnifyGestureState {
+        case idle
+        /// Gesture began outside all visible pins; let normal handling run.
+        case passthrough
+        /// Gesture began on a pin; every step until `.ended`/`.cancelled` stays bound to it.
+        case latched(WeakPin)
+    }
+
+    private struct WeakPin {
+        weak var controller: PinWindowController?
+    }
+
+    struct GestureTapBackend {
+        var hasListenAccess: () -> Bool
+        var requestListenAccess: () -> Bool
+        var createTap: (@escaping (CGEventType, CGEvent) -> Void) -> AnyObject?
+        var setEnabled: (AnyObject, Bool) -> Void
+        var isEnabled: (AnyObject) -> Bool
+        var invalidate: (AnyObject) -> Void
+
+        static let live = GestureTapBackend(
+            hasListenAccess: { CGPreflightListenEventAccess() },
+            requestListenAccess: { CGRequestListenEventAccess() },
+            createTap: { handler in
+                let box = TapCallbackBox(handler)
+                let retainedBox = Unmanaged.passRetained(box)
+                let callback: CGEventTapCallBack = { _, type, cgEvent, userInfo in
+                    if let userInfo {
+                        let box = Unmanaged<TapCallbackBox>.fromOpaque(userInfo).takeUnretainedValue()
+                        box.handler(type, cgEvent)
+                    }
+                    return Unmanaged.passUnretained(cgEvent)
+                }
+                let userInfo = retainedBox.toOpaque()
+                let mask = PinWindowManager.gestureEventTapMask
+                // Trackpad gesture records (`kCGEventGesture`) are dispatched
+                // at `.cghidEventTap` / `.cgAnnotatedSessionEventTap` in SkyLight,
+                // not `.cgSessionEventTap`; attach to `.cghidEventTap` first.
+                let tap = CGEvent.tapCreate(
+                    tap: .cghidEventTap,
+                    place: .tailAppendEventTap,
+                    options: .listenOnly,
+                    eventsOfInterest: mask,
+                    callback: callback,
+                    userInfo: userInfo
+                ) ?? CGEvent.tapCreate(
+                    tap: .cgAnnotatedSessionEventTap,
+                    place: .tailAppendEventTap,
+                    options: .listenOnly,
+                    eventsOfInterest: mask,
+                    callback: callback,
+                    userInfo: userInfo
+                ) ?? CGEvent.tapCreate(
+                    tap: .cgSessionEventTap,
+                    place: .tailAppendEventTap,
+                    options: .listenOnly,
+                    eventsOfInterest: mask,
+                    callback: callback,
+                    userInfo: userInfo
+                )
+                guard let tap,
+                      let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+                    if let tap { CFMachPortInvalidate(tap) }
+                    retainedBox.release()
+                    return nil
+                }
+                let handle = LiveGestureTapHandle(port: tap, runLoopSource: source, callbackBox: retainedBox)
+                CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+                CGEvent.tapEnable(tap: tap, enable: true)
+                guard CGEvent.tapIsEnabled(tap: tap) else {
+                    handle.invalidate()
+                    return nil
+                }
+                return handle
+            },
+            setEnabled: { handle, enabled in
+                guard let handle = handle as? LiveGestureTapHandle else { return }
+                CGEvent.tapEnable(tap: handle.port, enable: enabled)
+            },
+            isEnabled: { handle in
+                guard let handle = handle as? LiveGestureTapHandle else { return false }
+                return CGEvent.tapIsEnabled(tap: handle.port)
+            },
+            invalidate: { handle in
+                (handle as? LiveGestureTapHandle)?.invalidate()
+            }
+        )
+    }
+
+    private final class TapCallbackBox {
+        let handler: (CGEventType, CGEvent) -> Void
+
+        init(_ handler: @escaping (CGEventType, CGEvent) -> Void) {
+            self.handler = handler
+        }
+    }
+
+    private final class LiveGestureTapHandle {
+        let port: CFMachPort
+        let runLoopSource: CFRunLoopSource
+        var callbackBox: Unmanaged<TapCallbackBox>?
+
+        init(port: CFMachPort, runLoopSource: CFRunLoopSource, callbackBox: Unmanaged<TapCallbackBox>) {
+            self.port = port
+            self.runLoopSource = runLoopSource
+            self.callbackBox = callbackBox
+        }
+
+        func invalidate() {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+            CGEvent.tapEnable(tap: port, enable: false)
+            CFMachPortInvalidate(port)
+            callbackBox?.release()
+            callbackBox = nil
+        }
+    }
+
+    private static let cgEventTypeGesture: UInt32 = 29 // kCGEventGesture
+    private static let cgEventTypeMagnify: UInt32 = 30
+    private static let gestureEventTapMask: CGEventMask = (1 << 29) | (1 << 30)
+    private static let magnifyTimestampTolerance: TimeInterval = 1e-5
+    private static let maxRecentMagnifyTimestamps = 8
+
     private var cascadeStep = 0
+    private var magnifyMonitor: Any?
+    private var carbonGestureHandler: EventHandlerRef?
+    private var appActivityObservers: [NSObjectProtocol] = []
+    private var magnifyState: MagnifyGestureState = .idle
+    private var recentHandledMagnifyTimestamps: [TimeInterval] = []
+    private var backgroundGestureMonitoringEnabled = false
+    private var didAttemptUnprivilegedTap = false
+    private var backgroundGestureTap: AnyObject?
+
+    /// Checks whether a non-Pinboard window at a higher WindowServer z-order
+    /// covers `window` at `screenPoint`. Injectable so unit tests stay deterministic.
+    var externalOcclusionTester: (NSWindow, CGPoint) -> Bool = PinWindowManager.isWindowOccludedInWindowServer
+
+    /// Abstracts `CGEvent` tap creation and TCC ListenEvent checks for deterministic testing.
+    var gestureTapBackend: GestureTapBackend = .live {
+        willSet {
+            tearDownBackgroundGestureTap()
+        }
+        didSet {
+            didAttemptUnprivilegedTap = false
+            syncBackgroundGestureTap()
+        }
+    }
 
     var count: Int { pins.count }
     var visibleCount: Int { pins.filter(\.isPinVisible).count }
+    var hasVisibleZoomablePin: Bool { pins.contains { $0.isPinVisible && $0.supportsZoom } }
+    var hasBackgroundGestureAccess: Bool {
+        gestureTapBackend.hasListenAccess() || isBackgroundGestureTapEnabled
+    }
+    var isBackgroundGestureTapEnabled: Bool {
+        backgroundGestureTap.map { gestureTapBackend.isEnabled($0) } ?? false
+    }
 
-    private init() {}
+    private init() {
+        // Ensure `NSApp` exists before installing local `NSEvent` monitors (in
+        // unit tests `PinWindowManager.shared` can be touched before AppKit boot).
+        _ = NSApplication.shared
+        magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.magnify, .endGesture]) { [weak self] event in
+            guard let self else { return event }
+            return self.handleLocalGestureEvent(event)
+        }
+        installCarbonGestureHandler()
+        let center = NotificationCenter.default
+        let becomeActiveToken = center.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.didAttemptUnprivilegedTap = false
+            self.syncBackgroundGestureTap()
+        }
+        let resignActiveToken = center.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncBackgroundGestureTap()
+        }
+        appActivityObservers = [becomeActiveToken, resignActiveToken]
+    }
+
+    deinit {
+        if let magnifyMonitor {
+            NSEvent.removeMonitor(magnifyMonitor)
+        }
+        if let carbonGestureHandler {
+            RemoveEventHandler(carbonGestureHandler)
+        }
+        for token in appActivityObservers {
+            NotificationCenter.default.removeObserver(token)
+        }
+        tearDownBackgroundGestureTap()
+    }
 
     // MARK: - Creation
 
@@ -100,6 +306,8 @@ final class PinWindowManager {
     func closeAll() {
         pins.forEach { $0.closePin() }
         pins.removeAll()
+        magnifyState = .idle
+        recentHandledMagnifyTimestamps.removeAll()
         notifyChange()
     }
 
@@ -108,6 +316,11 @@ final class PinWindowManager {
     }
 
     func notifyChange() {
+        if case .latched(let weakPin) = magnifyState,
+           weakPin.controller?.isPinVisible != true {
+            magnifyState = .idle
+        }
+        syncBackgroundGestureTap()
         onChange?()
     }
 
@@ -223,6 +436,344 @@ final class PinWindowManager {
                 onHistoryError?(error)
             }
         }
+    }
+
+    // MARK: - Trackpad gesture routing
+
+    func startBackgroundGestureMonitoring() {
+        backgroundGestureMonitoringEnabled = true
+        syncBackgroundGestureTap()
+    }
+
+    func stopBackgroundGestureMonitoring() {
+        backgroundGestureMonitoringEnabled = false
+        didAttemptUnprivilegedTap = false
+        recentHandledMagnifyTimestamps.removeAll()
+        tearDownBackgroundGestureTap()
+    }
+
+    /// Prompts for Input Monitoring access and retries installing the
+    /// background gesture tap once granted.
+    @discardableResult
+    func requestBackgroundGestureAccess() -> Bool {
+        let granted = gestureTapBackend.requestListenAccess()
+        didAttemptUnprivilegedTap = false
+        syncBackgroundGestureTap()
+        return granted || gestureTapBackend.hasListenAccess()
+    }
+
+    private func syncBackgroundGestureTap() {
+        let shouldListen = backgroundGestureMonitoringEnabled && hasVisibleZoomablePin
+        if shouldListen {
+            if let tap = backgroundGestureTap {
+                if !gestureTapBackend.isEnabled(tap) {
+                    gestureTapBackend.setEnabled(tap, true)
+                    if !gestureTapBackend.isEnabled(tap) {
+                        tearDownBackgroundGestureTap()
+                    }
+                }
+            } else if gestureTapBackend.hasListenAccess() || !didAttemptUnprivilegedTap {
+                if !gestureTapBackend.hasListenAccess() {
+                    didAttemptUnprivilegedTap = true
+                }
+                installBackgroundGestureTap()
+            }
+        } else if let tap = backgroundGestureTap, gestureTapBackend.isEnabled(tap) {
+            gestureTapBackend.setEnabled(tap, false)
+        }
+    }
+
+    private func installBackgroundGestureTap() {
+        guard backgroundGestureTap == nil else { return }
+        backgroundGestureTap = gestureTapBackend.createTap { [weak self] type, cgEvent in
+            self?.handleBackgroundTapCallback(type: type, cgEvent: cgEvent)
+        }
+    }
+
+    private func tearDownBackgroundGestureTap() {
+        if let tap = backgroundGestureTap {
+            gestureTapBackend.invalidate(tap)
+            backgroundGestureTap = nil
+        }
+    }
+
+    private func installCarbonGestureHandler() {
+        guard carbonGestureHandler == nil else { return }
+        var specs = [
+            EventTypeSpec(eventClass: OSType(kEventClassGesture), eventKind: UInt32(kEventGestureMagnify)),
+            EventTypeSpec(eventClass: OSType(kEventClassGesture), eventKind: UInt32(kEventGestureEnded))
+        ]
+        let userData = Unmanaged.passUnretained(self).toOpaque()
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            { nextHandler, eventRef, userData -> OSStatus in
+                guard let eventRef, let userData else {
+                    return CallNextEventHandler(nextHandler, eventRef)
+                }
+                let manager = Unmanaged<PinWindowManager>.fromOpaque(userData).takeUnretainedValue()
+                return manager.handleCarbonGestureEvent(nextHandler: nextHandler, eventRef: eventRef)
+            },
+            specs.count,
+            &specs,
+            userData,
+            &carbonGestureHandler
+        )
+    }
+
+    private func handleCarbonGestureEvent(nextHandler: EventHandlerCallRef?, eventRef: EventRef) -> OSStatus {
+        guard NSApp.modalWindow == nil else {
+            return CallNextEventHandler(nextHandler, eventRef)
+        }
+        switch Int(GetEventKind(eventRef)) {
+        case kEventGestureMagnify:
+            guard let event = NSEvent(eventRef: UnsafeRawPointer(eventRef)) else {
+                return CallNextEventHandler(nextHandler, eventRef)
+            }
+            if handleForegroundMagnifyEvent(event) == nil {
+                return noErr
+            }
+            return CallNextEventHandler(nextHandler, eventRef)
+        case kEventGestureEnded:
+            finishLatchedMagnifyIfNeeded()
+            return CallNextEventHandler(nextHandler, eventRef)
+        default:
+            return CallNextEventHandler(nextHandler, eventRef)
+        }
+    }
+
+    private func handleBackgroundTapCallback(type: CGEventType, cgEvent: CGEvent) {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap = backgroundGestureTap,
+               backgroundGestureMonitoringEnabled && hasVisibleZoomablePin {
+                gestureTapBackend.setEnabled(tap, true)
+            }
+            return
+        }
+        guard type.rawValue == Self.cgEventTypeGesture || type.rawValue == Self.cgEventTypeMagnify else {
+            return
+        }
+        guard NSApp.modalWindow == nil else { return }
+        guard let event = NSEvent(cgEvent: cgEvent),
+              event.type == .magnify || event.type == .endGesture else {
+            return
+        }
+        routeBackgroundGestureEvent(
+            event,
+            pointerLocation: NSEvent.mouseLocation,
+            isAppActive: NSApp.isActive
+        )
+    }
+
+    private func handleLocalGestureEvent(_ event: NSEvent) -> NSEvent? {
+        switch event.type {
+        case .magnify:
+            return handleForegroundMagnifyEvent(event)
+        case .endGesture:
+            finishLatchedMagnifyIfNeeded()
+            return event
+        default:
+            return event
+        }
+    }
+
+    private func handleForegroundMagnifyEvent(_ event: NSEvent) -> NSEvent? {
+        if hasAlreadyHandledMagnify(timestamp: event.timestamp) {
+            return nil
+        }
+        return routeMagnifyEvent(
+            event,
+            pointerLocation: NSEvent.mouseLocation,
+            ignoreEventWindow: false
+        )
+    }
+
+    /// Routes `.magnify` arriving directly through a pin view or attached
+    /// toolbar's responder chain so it shares latching and deduplication.
+    func handleResponderMagnify(_ event: NSEvent, for controller: PinWindowController?) {
+        guard event.type == .magnify,
+              let controller,
+              controller.isPinVisible,
+              !hasAlreadyHandledMagnify(timestamp: event.timestamp) else {
+            return
+        }
+        let isTerminal = !event.phase.intersection([.ended, .cancelled]).isEmpty
+        magnifyState = isTerminal ? .idle : .latched(WeakPin(controller: controller))
+        recordHandledMagnifyTimestamp(event.timestamp)
+        controller.handleMagnify(with: event)
+    }
+
+    /// Routes trackpad gesture events observed via the listen-only HID/session tap.
+    /// Deduplicates by event timestamp so active-app gestures handled via Carbon,
+    /// local monitors, or the responder chain never zoom twice, while non-key
+    /// pins remain zoomable whether Pinboard is inactive or active.
+    func routeBackgroundGestureEvent(
+        _ event: NSEvent,
+        pointerLocation: CGPoint,
+        isAppActive: Bool = NSApp.isActive
+    ) {
+        _ = isAppActive
+        switch event.type {
+        case .magnify:
+            guard !hasAlreadyHandledMagnify(timestamp: event.timestamp) else { return }
+            _ = routeMagnifyEvent(
+                event,
+                pointerLocation: pointerLocation,
+                ignoreEventWindow: true
+            )
+        case .endGesture:
+            finishLatchedMagnifyIfNeeded()
+        default:
+            break
+        }
+    }
+
+    private func hasAlreadyHandledMagnify(timestamp: TimeInterval) -> Bool {
+        guard timestamp > 0 else { return false }
+        return recentHandledMagnifyTimestamps.contains {
+            abs($0 - timestamp) < Self.magnifyTimestampTolerance
+        }
+    }
+
+    private func recordHandledMagnifyTimestamp(_ timestamp: TimeInterval) {
+        guard timestamp > 0, !hasAlreadyHandledMagnify(timestamp: timestamp) else { return }
+        if recentHandledMagnifyTimestamps.count >= Self.maxRecentMagnifyTimestamps {
+            recentHandledMagnifyTimestamps.removeFirst()
+        }
+        recentHandledMagnifyTimestamps.append(timestamp)
+    }
+
+    private func finishLatchedMagnifyIfNeeded() {
+        if case .latched(let weakPin) = magnifyState,
+           let target = weakPin.controller,
+           target.isPinVisible {
+            target.finishMagnifyGesture()
+        }
+        magnifyState = .idle
+    }
+
+    /// Routes `.magnify` to the hovered or latched `PinPanel`, consuming the
+    /// event (`return nil`) when matched so key pins never zoom twice.
+    @discardableResult
+    func routeMagnifyEvent(
+        _ event: NSEvent,
+        pointerLocation: CGPoint = NSEvent.mouseLocation,
+        ignoreEventWindow: Bool = false
+    ) -> NSEvent? {
+        guard event.type == .magnify else { return event }
+        let phase = event.phase
+        let isTerminal = !phase.intersection([.ended, .cancelled]).isEmpty
+
+        if phase == .mayBegin || phase.contains(.began) {
+            guard let target = candidateMagnifyPin(
+                for: event,
+                pointerLocation: pointerLocation,
+                ignoreEventWindow: ignoreEventWindow
+            ) else {
+                magnifyState = phase.contains(.began) && !isTerminal ? .passthrough : .idle
+                return event
+            }
+            magnifyState = isTerminal ? .idle : .latched(WeakPin(controller: target))
+            recordHandledMagnifyTimestamp(event.timestamp)
+            if phase.contains(.began) || event.magnification != 0 || isTerminal {
+                target.handleMagnify(with: event)
+            }
+            return nil
+        }
+
+        if phase.isEmpty {
+            magnifyState = .idle
+            guard let target = candidateMagnifyPin(
+                for: event,
+                pointerLocation: pointerLocation,
+                ignoreEventWindow: ignoreEventWindow
+            ) else { return event }
+            recordHandledMagnifyTimestamp(event.timestamp)
+            target.handleMagnify(with: event)
+            return nil
+        }
+
+        switch magnifyState {
+        case .latched(let weakPin):
+            if isTerminal { magnifyState = .idle }
+            recordHandledMagnifyTimestamp(event.timestamp)
+            if let target = weakPin.controller, target.isPinVisible {
+                target.handleMagnify(with: event)
+            }
+            return nil
+        case .passthrough:
+            if isTerminal { magnifyState = .idle }
+            return event
+        case .idle:
+            guard let target = candidateMagnifyPin(
+                for: event,
+                pointerLocation: pointerLocation,
+                ignoreEventWindow: ignoreEventWindow
+            ) else { return event }
+            if !isTerminal {
+                magnifyState = .latched(WeakPin(controller: target))
+            }
+            recordHandledMagnifyTimestamp(event.timestamp)
+            target.handleMagnify(with: event)
+            return nil
+        }
+    }
+
+    private func candidateMagnifyPin(
+        for event: NSEvent,
+        pointerLocation: CGPoint,
+        ignoreEventWindow: Bool
+    ) -> PinWindowController? {
+        if !ignoreEventWindow, let window = event.window, let pin = pinController(for: window) {
+            return pin.isPinVisible ? pin : nil
+        }
+        return topmostVisiblePin(at: pointerLocation)
+    }
+
+    private func pinController(for window: NSWindow) -> PinWindowController? {
+        ((window as? PinPanel) ?? (window.parent as? PinPanel))?.pinController
+    }
+
+    private func topmostVisiblePin(at screenPoint: CGPoint) -> PinWindowController? {
+        guard let (candidatePin, candidateWindow) = frontmostLocalPinWindow(at: screenPoint) else {
+            return nil
+        }
+        guard !externalOcclusionTester(candidateWindow, screenPoint) else {
+            return nil
+        }
+        return candidatePin
+    }
+
+    private func frontmostLocalPinWindow(at screenPoint: CGPoint) -> (PinWindowController, NSWindow)? {
+        if let numbers = NSWindow.windowNumbers(options: []), !numbers.isEmpty {
+            for number in numbers {
+                guard let window = NSApp.window(withWindowNumber: number.intValue),
+                      window.isVisible,
+                      !window.ignoresMouseEvents,
+                      window.frame.contains(screenPoint) else { continue }
+                guard let pin = pinController(for: window), pin.isPinVisible else {
+                    return nil
+                }
+                return (pin, window)
+            }
+            return nil
+        }
+        if let pin = pins.last(where: { $0.isPinVisible && $0.panel.frame.contains(screenPoint) }) {
+            return (pin, pin.panel)
+        }
+        return nil
+    }
+
+    static func isWindowOccludedInWindowServer(_ window: NSWindow, at screenPoint: CGPoint) -> Bool {
+        let hitWindowNumber = NSWindow.windowNumber(at: screenPoint, belowWindowWithWindowNumber: 0)
+        guard hitWindowNumber > 0, hitWindowNumber != window.windowNumber else {
+            return false
+        }
+        guard let allNumbers = NSWindow.windowNumbers(options: [.allApplications])?.map(\.intValue),
+              let hitIndex = allNumbers.firstIndex(of: hitWindowNumber),
+              let candidateIndex = allNumbers.firstIndex(of: window.windowNumber) else {
+            return false
+        }
+        return hitIndex < candidateIndex
     }
 
     // MARK: - Placement

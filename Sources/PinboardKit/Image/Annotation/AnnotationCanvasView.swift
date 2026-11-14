@@ -128,6 +128,11 @@ final class AnnotationCanvasView: NSView, NSTextFieldDelegate {
         isActive ? super.hitTest(point) : nil
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        refreshTextEditorAppearance()
+    }
+
     // MARK: - Coordinate mapping
 
     var sourceRect: CGRect { store.cropRect ?? CGRect(origin: .zero, size: imageSize) }

@@ -22,6 +22,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             Toast.show("Couldn't update pin history", duration: 3)
         }
         manager.historyStore = .shared
+        manager.startBackgroundGestureMonitoring()
         lastRetention = (
             mode: Preferences.shared.historyRetention,
             days: Preferences.shared.historyCustomDays
@@ -39,6 +40,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         manager.flushAllHistorySyncs()
+        manager.stopBackgroundGestureMonitoring()
         HotKeyManager.shared.unregister()
     }
 

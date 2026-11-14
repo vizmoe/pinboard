@@ -26,7 +26,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         case explicit(visible: Bool)
     }
 
-    /// Floating-point state for continuous trackpad pinch/scroll zoom gestures.
+    /// Floating-point state for continuous trackpad pinch-to-zoom gestures.
     private struct ZoomGestureSession {
         var currentSize: CGSize = .zero
         var anchorCenter: CGPoint = .zero
@@ -258,42 +258,26 @@ final class PinWindowController: NSObject, NSWindowDelegate {
 
     func handleMagnify(with event: NSEvent) {
         guard supportsZoom else { return }
-        if event.phase == .began {
+        if event.phase.contains(.began) {
             zoomSession.sync(to: panel.frame)
         }
         if event.magnification != 0 {
-            zoom(by: 1 + event.magnification, isContinuousGesture: true)
+            let isContinuous = event.phase != []
+            zoom(by: max(0.05, 1 + event.magnification), isContinuousGesture: isContinuous)
         }
-        if event.phase == .ended || event.phase == .cancelled {
+        if !event.phase.intersection([.ended, .cancelled]).isEmpty {
             zoomSession.flushShadowInvalidation(for: panel)
         }
     }
 
-    func handleScrollWheel(with event: NSEvent) {
+    func finishMagnifyGesture() {
         guard supportsZoom else { return }
-        guard !rootView.isEditingContent || event.modifierFlags.contains(.command) else { return }
-        if event.phase == .began {
-            zoomSession.sync(to: panel.frame)
-        }
-        let rawDelta: CGFloat
-        if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
-            rawDelta = event.scrollingDeltaX
-        } else {
-            rawDelta = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
-        }
-        guard abs(rawDelta) > 0.01 else { return }
-        let sensitivity: CGFloat = event.hasPreciseScrollingDeltas ? 0.0045 : 0.03
-        let factor = max(0.7, min(1.3, 1 + rawDelta * sensitivity))
-        let isContinuous = event.phase != [] || event.momentumPhase != []
-        zoom(by: factor, isContinuousGesture: isContinuous)
-        if event.phase == .ended || event.momentumPhase == .ended {
-            zoomSession.flushShadowInvalidation(for: panel)
-        }
+        zoomSession.flushShadowInvalidation(for: panel)
     }
 
-    /// Uniform zoom around the window centre, used by the trackpad pinch and
-    /// two-finger swipe gestures. Keeps unrounded floating-point state across
-    /// continuous steps so the centre and aspect ratio never drift.
+    /// Uniform zoom around the window centre, used by the trackpad pinch-to-zoom
+    /// gesture. Keeps unrounded floating-point state across continuous steps so
+    /// the centre and aspect ratio never drift.
     func zoom(by factor: CGFloat, isContinuousGesture: Bool = false) {
         guard supportsZoom, factor > 0 else { return }
         let now = ProcessInfo.processInfo.systemUptime

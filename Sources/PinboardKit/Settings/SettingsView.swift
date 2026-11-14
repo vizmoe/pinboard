@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var preferences: Preferences
     @State private var hotkeyError: String?
+    @State private var hasBackgroundGestureAccess = PinWindowManager.shared.hasBackgroundGestureAccess
 
     /// nil means "Not Set" — a cleared shortcut is simply a disabled one.
     private var currentShortcut: HotKeyManager.Shortcut? {
@@ -31,6 +33,21 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Place new pins at the pointer", isOn: $preferences.placeNewWindowAtMouse)
+                if !hasBackgroundGestureAccess {
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Background trackpad pinch-to-zoom")
+                            Text("Requires Input Monitoring to zoom hovered image pins while other apps stay focused.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Allow…") {
+                            requestBackgroundGestureAccess()
+                        }
+                        .controlSize(.small)
+                    }
+                }
             } header: {
                 Text("Pins")
             } footer: {
@@ -75,6 +92,21 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 420)
         .fixedSize(horizontal: false, vertical: true)
+        .onAppear {
+            hasBackgroundGestureAccess = PinWindowManager.shared.hasBackgroundGestureAccess
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            hasBackgroundGestureAccess = PinWindowManager.shared.hasBackgroundGestureAccess
+        }
+    }
+
+    private func requestBackgroundGestureAccess() {
+        let granted = PinWindowManager.shared.requestBackgroundGestureAccess()
+        hasBackgroundGestureAccess = granted
+        if !granted,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// Registers the shortcut first; preferences only update on success so a

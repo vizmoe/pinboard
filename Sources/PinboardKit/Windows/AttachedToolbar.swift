@@ -3,6 +3,14 @@ import AppKit
 final class ToolbarPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func magnify(with event: NSEvent) {
+        guard let pinController = (parent as? PinPanel)?.pinController else {
+            super.magnify(with: event)
+            return
+        }
+        (pinController.manager ?? .shared).handleResponderMagnify(event, for: pinController)
+    }
 }
 
 /// Compact control strip in a child panel pinned to a pin window.
