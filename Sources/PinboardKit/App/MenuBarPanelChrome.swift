@@ -272,6 +272,16 @@ final class MenuBarFloatingPanel: NSObject {
         }
     }
 
+    func handleGlobalMouseDown(at screenPoint: NSPoint) {
+        guard (window as? FloatingMenuBarWindow)?.isPresentingAttachedMenu != true else { return }
+        if let anchorView, let anchorWindow = anchorView.window {
+            let screenRect = anchorWindow.convertToScreen(anchorView.convert(anchorRect, to: nil))
+            // The system menu bar sends mouse-down globally before our status item's mouse-up action.
+            if screenRect.contains(screenPoint) { return }
+        }
+        close()
+    }
+
     private func installTransientMonitors() {
         removeTransientMonitors()
 
@@ -296,9 +306,8 @@ final class MenuBarFloatingPanel: NSObject {
 
         globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        ) { [weak self] _ in
-            guard (self?.window as? FloatingMenuBarWindow)?.isPresentingAttachedMenu != true else { return }
-            self?.close()
+        ) { [weak self] event in
+            self?.handleGlobalMouseDown(at: event.locationInWindow)
         }
 
         appResignObserver = NotificationCenter.default.addObserver(
