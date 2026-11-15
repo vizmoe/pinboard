@@ -32,10 +32,7 @@ final class MenuBarController: NSObject {
         super.init()
 
         let button = statusItem.button
-        let symbol = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinboard")?
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
-        symbol?.isTemplate = true
-        button?.image = symbol
+        button?.image = MenuBarIcon.image
         button?.target = self
         button?.action = #selector(togglePanel(_:))
         button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
