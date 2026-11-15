@@ -56,6 +56,38 @@ final class StatusPanelTests: XCTestCase {
         XCTAssertFalse(controller.popover.isShown)
     }
 
+    func testStatusAnchorMouseDownKeepsPanelOpenUntilToggle() throws {
+        anchor.performClick(nil)
+        try clickVisible("History")
+        let point = host.convertPoint(toScreen: anchor.convert(
+            NSPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: nil))
+
+        controller.panel.handleGlobalMouseDown(at: point)
+        XCTAssertTrue(controller.panel.isShown, "The status item's mouse-down must wait for its toggle action")
+        anchor.performClick(nil)
+        XCTAssertFalse(controller.panel.isShown, "The same click must close the panel without reopening it")
+
+        anchor.performClick(nil)
+        XCTAssertTrue(controller.panel.isShown)
+        XCTAssertEqual(controller.activePage, .history)
+    }
+
+    func testGlobalClicksOutsideStatusAnchorStillDismissPanel() {
+        let rect = host.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+        let points = [
+            NSPoint(x: rect.minX - 1, y: rect.midY),
+            NSPoint(x: rect.maxX + 1, y: rect.midY),
+            NSPoint(x: rect.midX, y: rect.minY - 1),
+            NSPoint(x: rect.midX, y: rect.maxY + 1)
+        ]
+        for point in points {
+            anchor.performClick(nil)
+            XCTAssertTrue(controller.panel.isShown)
+            controller.panel.handleGlobalMouseDown(at: point)
+            XCTAssertFalse(controller.panel.isShown, "Outside click at \(point) must dismiss the panel")
+        }
+    }
+
     func testPopoverShrinksWhenReturningFromHistory() throws {
         anchor.performClick(nil)
         try assertPopoverFitsActivePage("initial-pins")
